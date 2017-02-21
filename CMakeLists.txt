@@ -1,5 +1,7 @@
-cmake_minimum_required (VERSION 2.8.11)
+cmake_minimum_required (VERSION 3.0)
 project (MiniDbg)
+
+add_compile_options(-std=c++14)
 
 include_directories(ext/libelfin ext/linenoise)
 add_executable(minidbg src/minidbg.cpp ext/linenoise/linenoise.c)
