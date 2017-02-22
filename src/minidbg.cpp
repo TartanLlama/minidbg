@@ -1,4 +1,5 @@
 #include <string>
+#include <fstream>
 #include <iostream>
 #include <utility>
 #include <cstdio>
@@ -14,6 +15,31 @@
 
 #include "linenoise.h"
 
+class breakpoint {
+public:
+    breakpoint(pid_t pid, std::intptr_t addr) : m_pid{pid}, m_addr{addr}, m_enabled{false}, m_saved_data{} {}
+    void enable() {
+        m_saved_data = ptrace(PTRACE_PEEKTEXT, m_pid, (void*)m_addr, 0);
+        auto int3 = 0xcc;
+        auto data_with_int3 = (m_saved_data & ~0xff | int3);
+        ptrace(PTRACE_POKETEXT, m_pid, (void*)m_addr, data_with_int3);
+         
+        m_enabled = true;
+    }
+
+    void disable() {
+        ptrace(PTRACE_POKETEXT, m_pid, (void*)m_addr, m_saved_data);
+        m_enabled = false;
+    }
+
+    std::intptr_t get_address() { return m_addr; }
+private:
+    pid_t m_pid;
+    std::intptr_t m_addr;
+    bool m_enabled;
+    unsigned m_saved_data;
+};
+
 class debugger {
 public:
     debugger (std::string prog_name, pid_t pid)
@@ -25,51 +51,68 @@ public:
         }
 
     void run();
+    void dump_registers();
     void continue_execution();
     void single_step_instruction();
     siginfo_t get_signal_info();
     void set_breakpoint_at_address(std::intptr_t addr);    
-    void set_breakpoint_at_source_line(const std::string& file, std::size_t line);
+    void set_breakpoint_at_source_line(const std::string& file, unsigned line);
+    void print_source(const std::string& file_name, unsigned line, unsigned n_lines_context=2);
     
 private:
     void handle_command(const std::string& line);
     void handle_sigtrap(siginfo_t info);
     void wait_for_signal();    
     uint64_t get_pc();
-    std::string get_current_line_entry();
+    void set_pc(uint64_t pc);
+    void decrement_pc();        
+    dwarf::line_table::entry get_current_line_entry();
 
     std::string m_prog_name;
     pid_t m_pid;
     dwarf::dwarf m_dwarf;
     elf::elf m_elf;
     unsigned m_saved_data;
+    std::unique_ptr<breakpoint> m_breakpoint;
 };
 
 uint64_t debugger::get_pc() {
   struct user_regs_struct regs;
-  std::cout << ptrace(PTRACE_GETREGS, m_pid, nullptr, &regs) << std::endl;
+  ptrace(PTRACE_GETREGS, m_pid, nullptr, &regs);
   return regs.rip;
 }
 
-std::string debugger::get_current_line_entry() {
+void debugger::set_pc(uint64_t pc) {
+  struct user_regs_struct regs;
+  ptrace(PTRACE_GETREGS, m_pid, nullptr, &regs);
+  regs.rip = pc;
+  ptrace(PTRACE_SETREGS, m_pid, nullptr, &regs);      
+}
+
+void debugger::decrement_pc() {
+  struct user_regs_struct regs;
+  ptrace(PTRACE_GETREGS, m_pid, nullptr, &regs);
+  regs.rip -= 1;
+  ptrace(PTRACE_SETREGS, m_pid, nullptr, &regs);      
+}
+
+dwarf::line_table::entry debugger::get_current_line_entry() {
     auto pc = get_pc();
 
     for (auto &cu : m_dwarf.compilation_units()) {
         if (die_pc_range(cu.root()).contains(pc)) {
-            return "";//at_name(cu.root());
-            // Map PC to a line
             auto &lt = cu.get_line_table();
             auto it = lt.find_address(pc);
             if (it == lt.end()) {
-                return "";
+                throw std::out_of_range{"Cannot find line entry"};
             }
             else {
-                return it->get_description();
+                return *it;
             }
         }
     }
 
-    return "";
+    throw std::out_of_range{"Cannot find line entry"};
 }
 
 void debugger::run() {
@@ -79,6 +122,29 @@ void debugger::run() {
         linenoiseHistoryAdd(line);
         linenoiseFree(line);
     }
+}
+
+void debugger::print_source(const std::string& file_name, unsigned line, unsigned n_lines_context) {
+    std::ifstream file {file_name};
+    auto start_line = line < n_lines_context ? 0 : line - n_lines_context;
+    auto end_line = line + n_lines_context + (line < n_lines_context ? n_lines_context - line : 0) + 1;
+    
+    char c{};
+    auto current_line = 1u;
+    while (current_line != start_line && file.get(c)) {
+        if (c == '\n') {
+            ++current_line;
+        }
+    }
+    std::cout << (current_line==line ? "> " : "  ");
+    while (current_line != end_line && file.get(c)) {
+        std::cout << c;
+        if (c == '\n') {
+            ++current_line;
+            std::cout << (current_line==line ? "> " : "  ");
+        }
+    }
+    std::cout << std::endl;
 }
 
 bool is_prefix(const std::string& s, const std::string& of) {
@@ -102,8 +168,12 @@ void debugger::handle_sigtrap(siginfo_t info) {
     switch (info.si_code) {
     case SI_KERNEL:
     case TRAP_BRKPT:
-        std::cout << "Hit breakpoint" << std::endl;
+    {
+        std::cout << "Hit breakpoint at address 0x" << std::hex << get_pc() << std::endl;
+        auto line_entry = get_current_line_entry();
+        print_source(line_entry.file->path, line_entry.line);
         return;
+    }
     case TRAP_TRACE:
         std::cout << "Finished single stepping" << std::endl;
         return;
@@ -133,6 +203,14 @@ void debugger::wait_for_signal() {
 }
 
 void debugger::continue_execution() {
+    if (m_breakpoint && m_breakpoint->get_address() == get_pc() - 1) {
+        m_breakpoint->disable();
+        dump_registers();
+        decrement_pc();
+        dump_registers();        
+//        single_step_instruction();
+//        m_breakpoint->enable();
+    }
     ptrace(PTRACE_CONT, m_pid, nullptr, nullptr);
     wait_for_signal();
 }
@@ -144,15 +222,12 @@ void debugger::single_step_instruction() {
 
 void debugger::set_breakpoint_at_address(std::intptr_t addr) {
     std::cout << "Set breakpoint at address 0x" << std::hex << addr << std::endl;
-    m_saved_data = ptrace(PTRACE_PEEKTEXT, m_pid, (void*)addr, 0);
-    auto int3 = 0xcc;
-    auto data_with_int3 = (m_saved_data & ~0xff | int3);
-    ptrace(PTRACE_POKETEXT, m_pid, (void*)addr, data_with_int3);
+    m_breakpoint = std::make_unique<breakpoint>(m_pid, addr);
+    m_breakpoint->enable();
 }
 
-void debugger::set_breakpoint_at_source_line(const std::string& file, std::size_t line) {
+void debugger::set_breakpoint_at_source_line(const std::string& file, unsigned line) {
     for (const auto& cu : m_dwarf.compilation_units()) {
-        std::cerr << at_name(cu.root()) << std::endl;
         if (is_suffix(file, at_name(cu.root()))) {
             const auto& lt = cu.get_line_table();
 
@@ -166,14 +241,50 @@ void debugger::set_breakpoint_at_source_line(const std::string& file, std::size_
     }
 }
 
+void debugger::dump_registers() {
+    struct user_regs_struct regs;
+    ptrace(PTRACE_GETREGS, m_pid, nullptr, &regs);
+    std::cout << "r15" << ' ' << std::hex << regs.r15 << std::endl;
+    std::cout << "r14" << ' ' << std::hex << regs.r14 << std::endl;
+    std::cout << "r13" << ' ' << std::hex << regs.r13 << std::endl;
+    std::cout << "r12" << ' ' << std::hex << regs.r12 << std::endl;
+    std::cout << "bp" << ' ' << std::hex << regs.rbp << std::endl;
+    std::cout << "bx" << ' ' << std::hex << regs.rbx << std::endl;
+    std::cout << "r11" << ' ' << std::hex << regs.r11 << std::endl;
+    std::cout << "r10" << ' ' << std::hex << regs.r10 << std::endl;
+    std::cout << "r9" << ' ' << std::hex << regs.r9 << std::endl;
+    std::cout << "r8" << ' ' << std::hex << regs.r8 << std::endl;
+    std::cout << "ax" << ' ' << std::hex << regs.rax << std::endl;
+    std::cout << "cx" << ' ' << std::hex << regs.rcx << std::endl;
+    std::cout << "dx" << ' ' << std::hex << regs.rdx << std::endl;
+    std::cout << "si" << ' ' << std::hex << regs.rsi << std::endl;
+    std::cout << "di" << ' ' << std::hex << regs.rdi << std::endl;
+    std::cout << "orig_ax" << ' ' << std::hex << regs.orig_rax << std::endl;
+    std::cout << "ip" << ' ' << std::hex << regs.rip << std::endl;
+    std::cout << "cs" << ' ' << std::hex << regs.cs << std::endl;
+    std::cout << "flags" << ' ' << std::hex << regs.eflags << std::endl;
+    std::cout << "sp" << ' ' << std::hex << regs.rsp << std::endl;
+    std::cout << "ss" << ' ' << std::hex << regs.ss << std::endl;
+    std::cout << "fs_base" << ' ' << std::hex << regs.fs_base << std::endl;
+    std::cout << "gs_base" << ' ' << std::hex << regs.gs_base << std::endl;
+    std::cout << "ds" << ' ' << std::hex << regs.ds << std::endl;
+    std::cout << "es" << ' ' << std::hex << regs.es << std::endl;
+    std::cout << "fs" << ' ' << std::hex << regs.fs << std::endl;
+    std::cout << "gs" << ' ' << std::hex << regs.gs << std::endl;
+}
+
 void debugger::handle_command(const std::string& line) {
-    if (line == "cont") {
+    if (is_prefix(line, "cont")) {
         continue_execution();
     }
-    else if (line == "line") {
-        std::cout << get_current_line_entry() << std::endl;
+    else if (is_prefix(line, "line")) {
+        auto line_entry = get_current_line_entry();
+        std::cout << line_entry.file->path << ':' << line_entry.line << std::endl;
     }
-    else if (line == "pc") {
+    else if (is_prefix(line, "registers")) {
+        dump_registers();
+    }    
+    else if (is_prefix(line, "pc")) {
         std::cout << std::hex << get_pc() << std::endl;
     }
     else if(is_prefix(line, "break")) {
