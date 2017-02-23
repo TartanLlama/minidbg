@@ -1,6 +1,7 @@
 #include <string>
 #include <fstream>
 #include <iostream>
+#include <iomanip>
 #include <utility>
 #include <cstdio>
 #include <unistd.h>
@@ -20,9 +21,9 @@ public:
     breakpoint(pid_t pid, std::intptr_t addr) : m_pid{pid}, m_addr{addr}, m_enabled{false}, m_saved_data{} {}
     void enable() {
         m_saved_data = ptrace(PTRACE_PEEKTEXT, m_pid, (void*)m_addr, 0);
-        auto int3 = 0xcc;
-        auto data_with_int3 = (m_saved_data & ~0xff | int3);
-        ptrace(PTRACE_POKETEXT, m_pid, (void*)m_addr, data_with_int3);
+        uint64_t int3 = 0xcc;
+        uint64_t data_with_int3 = (m_saved_data & ~0xff | int3);
+        ptrace(PTRACE_POKETEXT, m_pid, (void*)m_addr, data_with_int3); 
          
         m_enabled = true;
     }
@@ -32,12 +33,14 @@ public:
         m_enabled = false;
     }
 
+    bool is_enabled() { return m_enabled; }
+    
     std::intptr_t get_address() { return m_addr; }
 private:
     pid_t m_pid;
     std::intptr_t m_addr;
     bool m_enabled;
-    unsigned m_saved_data;
+    uint64_t m_saved_data;
 };
 
 class debugger {
@@ -52,6 +55,7 @@ public:
 
     void run();
     void dump_registers();
+    void read_memory();    
     void continue_execution();
     void single_step_instruction();
     siginfo_t get_signal_info();
@@ -60,6 +64,7 @@ public:
     void print_source(const std::string& file_name, unsigned line, unsigned n_lines_context=2);
     
 private:
+    void unchecked_single_step_instruction();    
     void handle_command(const std::string& line);
     void handle_sigtrap(siginfo_t info);
     void wait_for_signal();    
@@ -169,6 +174,7 @@ void debugger::handle_sigtrap(siginfo_t info) {
     case SI_KERNEL:
     case TRAP_BRKPT:
     {
+        decrement_pc();
         std::cout << "Hit breakpoint at address 0x" << std::hex << get_pc() << std::endl;
         auto line_entry = get_current_line_entry();
         print_source(line_entry.file->path, line_entry.line);
@@ -195,7 +201,7 @@ void debugger::wait_for_signal() {
         handle_sigtrap(siginfo);
         break;
     case SIGSEGV:
-        std::cout << "Yay, segfault" << std::endl;
+        std::cout << "Yay, segfault. Reason: " << siginfo.si_code << std::endl;
         break;
     default:
         std::cout << "Got signal " << strsignal(siginfo.si_signo) << std::endl;
@@ -203,21 +209,29 @@ void debugger::wait_for_signal() {
 }
 
 void debugger::continue_execution() {
-    if (m_breakpoint && m_breakpoint->get_address() == get_pc() - 1) {
+    if (m_breakpoint && m_breakpoint->get_address() == get_pc()) {
         m_breakpoint->disable();
-        dump_registers();
-        decrement_pc();
-        dump_registers();        
-//        single_step_instruction();
-//        m_breakpoint->enable();
+        unchecked_single_step_instruction();
+        m_breakpoint->enable();
     }
     ptrace(PTRACE_CONT, m_pid, nullptr, nullptr);
     wait_for_signal();
 }
 
-void debugger::single_step_instruction() {
+void debugger::unchecked_single_step_instruction() {
     ptrace(PTRACE_SINGLESTEP, m_pid, nullptr, nullptr);
     wait_for_signal();
+}
+    
+void debugger::single_step_instruction() {
+    if (m_breakpoint && m_breakpoint->get_address() == get_pc()) {
+        m_breakpoint->disable();
+        unchecked_single_step_instruction();
+        m_breakpoint->enable();
+        return;
+    }
+    
+    unchecked_single_step_instruction();
 }
 
 void debugger::set_breakpoint_at_address(std::intptr_t addr) {
@@ -244,33 +258,36 @@ void debugger::set_breakpoint_at_source_line(const std::string& file, unsigned l
 void debugger::dump_registers() {
     struct user_regs_struct regs;
     ptrace(PTRACE_GETREGS, m_pid, nullptr, &regs);
-    std::cout << "r15" << ' ' << std::hex << regs.r15 << std::endl;
-    std::cout << "r14" << ' ' << std::hex << regs.r14 << std::endl;
-    std::cout << "r13" << ' ' << std::hex << regs.r13 << std::endl;
-    std::cout << "r12" << ' ' << std::hex << regs.r12 << std::endl;
-    std::cout << "bp" << ' ' << std::hex << regs.rbp << std::endl;
-    std::cout << "bx" << ' ' << std::hex << regs.rbx << std::endl;
-    std::cout << "r11" << ' ' << std::hex << regs.r11 << std::endl;
-    std::cout << "r10" << ' ' << std::hex << regs.r10 << std::endl;
-    std::cout << "r9" << ' ' << std::hex << regs.r9 << std::endl;
-    std::cout << "r8" << ' ' << std::hex << regs.r8 << std::endl;
-    std::cout << "ax" << ' ' << std::hex << regs.rax << std::endl;
-    std::cout << "cx" << ' ' << std::hex << regs.rcx << std::endl;
-    std::cout << "dx" << ' ' << std::hex << regs.rdx << std::endl;
-    std::cout << "si" << ' ' << std::hex << regs.rsi << std::endl;
-    std::cout << "di" << ' ' << std::hex << regs.rdi << std::endl;
-    std::cout << "orig_ax" << ' ' << std::hex << regs.orig_rax << std::endl;
-    std::cout << "ip" << ' ' << std::hex << regs.rip << std::endl;
-    std::cout << "cs" << ' ' << std::hex << regs.cs << std::endl;
-    std::cout << "flags" << ' ' << std::hex << regs.eflags << std::endl;
-    std::cout << "sp" << ' ' << std::hex << regs.rsp << std::endl;
-    std::cout << "ss" << ' ' << std::hex << regs.ss << std::endl;
-    std::cout << "fs_base" << ' ' << std::hex << regs.fs_base << std::endl;
-    std::cout << "gs_base" << ' ' << std::hex << regs.gs_base << std::endl;
-    std::cout << "ds" << ' ' << std::hex << regs.ds << std::endl;
-    std::cout << "es" << ' ' << std::hex << regs.es << std::endl;
-    std::cout << "fs" << ' ' << std::hex << regs.fs << std::endl;
-    std::cout << "gs" << ' ' << std::hex << regs.gs << std::endl;
+    std::cout << "rax 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.rax << std::endl;
+    std::cout << "rbx 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.rbx << std::endl;    
+    std::cout << "rcx 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.rcx << std::endl;
+    std::cout << "rdx 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.rdx << std::endl;
+    std::cout << "rdi 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.rdi << std::endl;
+    std::cout << "rsi 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.rsi << std::endl;    
+    std::cout << "rbp 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.rbp << std::endl;
+    std::cout << "rsp 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.rsp << std::endl;
+    std::cout << "r8 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.r8 << std::endl;
+    std::cout << "r9 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.r9 << std::endl;
+    std::cout << "r10 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.r10 << std::endl;
+    std::cout << "r11 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.r11 << std::endl;
+    std::cout << "r12 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.r12 << std::endl;
+    std::cout << "r13 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.r13 << std::endl;
+    std::cout << "r14 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.r14 << std::endl;
+    std::cout << "r15 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.r15 << std::endl;
+    std::cout << "rip 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.rip << std::endl;
+    std::cout << "rflags 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.eflags << std::endl;    
+    std::cout << "cs 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.cs << std::endl;
+    std::cout << "fs 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.fs << std::endl;
+    std::cout << "gs 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.gs << std::endl;
+    std::cout << "ss 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.ss << std::endl;    
+    std::cout << "ds 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.ds << std::endl;
+    std::cout << "es 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.es << std::endl;
+}
+
+void debugger::read_memory() {
+    std::cout << std::hex << ptrace(PTRACE_PEEKDATA, m_pid, 0x40089a, nullptr) << std::endl;
+    std::cout << std::hex << ptrace(PTRACE_PEEKDATA, m_pid, 0x40089e, nullptr) << std::endl;
+    std::cout << std::hex << ptrace(PTRACE_PEEKDATA, m_pid, 0x400893, nullptr) << std::endl;    
 }
 
 void debugger::handle_command(const std::string& line) {
@@ -293,6 +310,9 @@ void debugger::handle_command(const std::string& line) {
     else if(is_prefix(line, "step")) {
         single_step_instruction();
     }
+    else if(is_prefix(line, "memory")) {
+        read_memory();
+    }    
     else {
         std::cerr << "Unknown command\n";
     }
