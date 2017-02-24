@@ -1,4 +1,5 @@
 #include <string>
+#include <unordered_map>
 #include <vector>
 #include <fstream>
 #include <iostream>
@@ -19,6 +20,7 @@
 
 class breakpoint {
 public:
+    breakpoint() = default;
     breakpoint(pid_t pid, std::intptr_t addr) : m_pid{pid}, m_addr{addr}, m_enabled{false}, m_saved_data{} {}
     void enable() {
         m_saved_data = ptrace(PTRACE_PEEKTEXT, m_pid, (void*)m_addr, 0);
@@ -65,6 +67,7 @@ public:
     void set_breakpoint_at_function(const std::string& name);
     void set_breakpoint_at_address(std::intptr_t addr);
     void set_breakpoint_at_source_line(const std::string& file, unsigned line);
+    breakpoint& get_breakpoint_from_pc(uint64_t pc);
     void print_source(const std::string& file_name, unsigned line, unsigned n_lines_context=2);
 
 private:
@@ -84,7 +87,7 @@ private:
     dwarf::dwarf m_dwarf;
     elf::elf m_elf;
     unsigned m_saved_data;
-    std::unique_ptr<breakpoint> m_breakpoint;
+    std::unordered_map<uint64_t,breakpoint> m_breakpoints;
 };
 
 uint64_t debugger::get_pc() {
@@ -237,12 +240,24 @@ void debugger::wait_for_signal() {
     }
 }
 
-void debugger::continue_execution() {
-    if (m_breakpoint && m_breakpoint->get_address() == get_pc()) {
-        m_breakpoint->disable();
-        unchecked_single_step_instruction();
-        m_breakpoint->enable();
+breakpoint& debugger::get_breakpoint_from_pc(uint64_t pc) {
+    for (auto&& bp : m_breakpoints) {
+        if (bp.first == pc) {
+            return bp.second;
+        }
     }
+    throw std::out_of_range{"Cannot find breakpoint"};
+}
+
+void debugger::continue_execution() {
+    try {
+        auto& bp = get_breakpoint_from_pc(get_pc());
+        bp.disable();
+        unchecked_single_step_instruction();
+        bp.enable();
+    }
+    catch(...) {}
+    
     ptrace(PTRACE_CONT, m_pid, nullptr, nullptr);
     wait_for_signal();
 }
@@ -253,14 +268,16 @@ void debugger::unchecked_single_step_instruction() {
 }
 
 void debugger::single_step_instruction() {
-    if (m_breakpoint && m_breakpoint->get_address() == get_pc()) {
-        m_breakpoint->disable();
+    try {
+        auto& bp = get_breakpoint_from_pc(get_pc());
+        bp.disable();
         unchecked_single_step_instruction();
-        m_breakpoint->enable();
+        bp.enable();
         auto line_entry = get_current_line_entry();
         print_source(line_entry.file->path, line_entry.line);
         return;
     }
+    catch(...){}
 
     unchecked_single_step_instruction();
     auto line_entry = get_current_line_entry();
@@ -269,8 +286,9 @@ void debugger::single_step_instruction() {
 
 void debugger::set_breakpoint_at_address(std::intptr_t addr) {
     std::cout << "Set breakpoint at address 0x" << std::hex << addr << std::endl;
-    m_breakpoint = std::make_unique<breakpoint>(m_pid, addr);
-    m_breakpoint->enable();
+    breakpoint bp {m_pid, addr};
+    m_breakpoints[addr] = bp;
+    bp.enable();
 }
 
 void debugger::set_breakpoint_at_function(const std::string& name) {
@@ -439,7 +457,7 @@ void debugger::print_backtrace() {
     auto current_func = get_function_at_pc(get_pc());
     
     auto output_frame = [&frame_number] (auto&& func) {  
-        std::cout << "frame #" << frame_number++ << ": " << dwarf::at_low_pc(func)
+        std::cout << "frame #" << frame_number++ << ": 0x" << dwarf::at_low_pc(func)
                   << ' ' << dwarf::at_name(func) << std::endl;
     };
 
