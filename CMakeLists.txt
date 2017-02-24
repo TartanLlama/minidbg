@@ -17,6 +17,11 @@ add_executable(variable examples/variable.cpp)
 set_target_properties(variable
                       PROPERTIES COMPILE_FLAGS "-g -O0")
 
+add_executable(unwinding examples/stack_unwinding.cpp)
+set_target_properties(unwinding
+                      PROPERTIES COMPILE_FLAGS "-g -O0")
+
+
 
 add_custom_target(
    libelfin

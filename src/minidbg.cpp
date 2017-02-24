@@ -56,7 +56,8 @@ public:
 
     void run();
     void dump_registers();
-    void read_memory();
+    uint64_t read_memory(uint64_t address);
+    void print_backtrace();    
     void read_variables();
     void continue_execution();
     void single_step_instruction();
@@ -76,7 +77,7 @@ private:
     void decrement_pc();
     dwarf::line_table::entry get_current_line_entry();
     dwarf::compilation_unit get_current_compilation_unit();
-    dwarf::die get_current_function();
+    dwarf::die get_function_at_pc(uint64_t pc);
 
     std::string m_prog_name;
     pid_t m_pid;
@@ -106,11 +107,11 @@ void debugger::decrement_pc() {
   ptrace(PTRACE_SETREGS, m_pid, nullptr, &regs);
 }
 
-dwarf::die debugger::get_current_function() {
+dwarf::die debugger::get_function_at_pc(uint64_t pc) {
     auto cu = get_current_compilation_unit();
     for (const auto& die : cu.root()) {
         if (die.tag == dwarf::DW_TAG::subprogram) {
-            if (die_pc_range(die).contains(get_pc())) {
+            if (die_pc_range(die).contains(pc)) {
                 return die;
             }
         }
@@ -380,7 +381,7 @@ private:
 void debugger::read_variables() {
     using namespace dwarf;
 
-    auto func = get_current_function();
+    auto func = get_function_at_pc(get_pc());
     for (const auto& die : func) {
         if (die.tag == DW_TAG::variable) {
             auto loc_val = die[DW_AT::location];
@@ -417,10 +418,8 @@ void debugger::read_variables() {
     }
 }
 
-void debugger::read_memory() {
-    std::cout << std::hex << ptrace(PTRACE_PEEKDATA, m_pid, 0x40089a, nullptr) << std::endl;
-    std::cout << std::hex << ptrace(PTRACE_PEEKDATA, m_pid, 0x40089e, nullptr) << std::endl;
-    std::cout << std::hex << ptrace(PTRACE_PEEKDATA, m_pid, 0x400893, nullptr) << std::endl;
+uint64_t debugger::read_memory(uint64_t address) {
+    return ptrace(PTRACE_PEEKDATA, m_pid, address, nullptr);
 }
 
 std::vector<std::string> split(const std::string &s) {
@@ -433,6 +432,27 @@ std::vector<std::string> split(const std::string &s) {
     }
 
     return out;
+}
+
+void debugger::print_backtrace() {
+    auto frame_number = 0;
+    auto current_func = get_function_at_pc(get_pc());
+    
+    auto output_frame = [&frame_number] (auto&& func) {  
+        std::cout << "frame #" << frame_number++ << ": " << dwarf::at_low_pc(func)
+                  << ' ' << dwarf::at_name(func) << std::endl;
+    };
+
+    output_frame(current_func);
+
+    auto frame_pointer = get_register_value_from_dwarf_register(m_pid, 6);
+    auto return_address = read_memory(frame_pointer+8);
+    while (dwarf::at_name(current_func) != "main") {
+        current_func = get_function_at_pc(return_address);
+        output_frame(current_func);
+        frame_pointer = read_memory(frame_pointer);
+        return_address = read_memory(frame_pointer+8);
+    }
 }
 
 void debugger::handle_command(const std::string& line) {
@@ -459,10 +479,13 @@ void debugger::handle_command(const std::string& line) {
         single_step_instruction();
     }
     else if(is_prefix(command, "memory")) {
-        read_memory();
+        read_memory(std::stoi(args[1]));
     }
     else if(is_prefix(command, "variables")) {
         read_variables();
+    }
+    else if(is_prefix(command, "backtrace")) {
+        print_backtrace();
     }
     else {
         std::cerr << "Unknown command\n";
