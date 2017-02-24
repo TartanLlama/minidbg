@@ -1,4 +1,5 @@
 #include <string>
+#include <vector>
 #include <fstream>
 #include <iostream>
 #include <iomanip>
@@ -133,10 +134,6 @@ dwarf::line_table::entry debugger::get_current_line_entry() {
 
     for (auto &cu : m_dwarf.compilation_units()) {
         if (die_pc_range(cu.root()).contains(pc)) {
-            std::cout << "Lines" << std::endl;
-            for (auto entry : cu.get_line_table()) {
-                std::cout << entry.get_description() << std::endl;
-            }
             auto &lt = cu.get_line_table();
             auto it = lt.find_address(pc);
             if (it == lt.end()) {
@@ -162,7 +159,7 @@ void debugger::run() {
 
 void debugger::print_source(const std::string& file_name, unsigned line, unsigned n_lines_context) {
     std::ifstream file {file_name};
-    auto start_line = line < n_lines_context ? 0 : line - n_lines_context;
+    auto start_line = line < n_lines_context ? 1 : line - n_lines_context;
     auto end_line = line + n_lines_context + (line < n_lines_context ? n_lines_context - line : 0) + 1;
 
     char c{};
@@ -173,7 +170,7 @@ void debugger::print_source(const std::string& file_name, unsigned line, unsigne
         }
     }
     std::cout << (current_line==line ? "> " : "  ");
-    while (current_line != end_line && file.get(c)) {
+    while (current_line <= end_line && file.get(c)) {
         std::cout << c;
         if (c == '\n') {
             ++current_line;
@@ -259,10 +256,14 @@ void debugger::single_step_instruction() {
         m_breakpoint->disable();
         unchecked_single_step_instruction();
         m_breakpoint->enable();
+        auto line_entry = get_current_line_entry();
+        print_source(line_entry.file->path, line_entry.line);
         return;
     }
 
     unchecked_single_step_instruction();
+    auto line_entry = get_current_line_entry();
+    print_source(line_entry.file->path, line_entry.line);
 }
 
 void debugger::set_breakpoint_at_address(std::intptr_t addr) {
@@ -327,39 +328,44 @@ void debugger::dump_registers() {
     std::cout << "es 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.es << std::endl;
 }
 
+uint64_t get_register_value_from_dwarf_register (pid_t pid, unsigned regnum) {
+    struct user_regs_struct regs;
+    ptrace(PTRACE_GETREGS, pid, nullptr, &regs);
+
+    switch (regnum) {
+    case 0: return regs.rax;
+    case 1: return regs.rdx;
+    case 2: return regs.rcx;
+    case 3: return regs.rbx;
+    case 4: return regs.rsi;
+    case 5: return regs.rdi;
+    case 6: return regs.rbp;
+    case 7: return regs.rsp;
+    case 8: return regs.r8;
+    case 9: return regs.r9;
+    case 10: return regs.r10;
+    case 11: return regs.r11;
+    case 12: return regs.r12;
+    case 13: return regs.r13;
+    case 14: return regs.r14;
+    case 15: return regs.r15;
+    case 49: return regs.eflags;
+    case 50: return regs.es;
+    case 51: return regs.cs;
+    case 52: return regs.ss;
+    case 53: return regs.fs;
+    case 54: return regs.gs;
+    default: throw std::out_of_range{"Unknown register " + std::to_string(regnum)};
+    }
+}
+
+
 class ptrace_expr_context : public dwarf::expr_context {
 public:
     ptrace_expr_context (pid_t pid) : m_pid{pid} {}
 
     dwarf::taddr reg (unsigned regnum) override {
-        struct user_regs_struct regs;
-        ptrace(PTRACE_GETREGS, m_pid, nullptr, &regs);
-
-        switch (regnum) {
-        case 0: return regs.rax;
-        case 1: return regs.rdx;
-        case 2: return regs.rcx;
-        case 3: return regs.rbx;
-        case 4: return regs.rsi;
-        case 5: return regs.rdi;
-        case 6: return regs.rbp;
-        case 7: return regs.rsp;
-        case 8: return regs.r8;
-        case 9: return regs.r9;
-        case 10: return regs.r10;
-        case 11: return regs.r11;
-        case 12: return regs.r12;
-        case 13: return regs.r13;
-        case 14: return regs.r14;
-        case 15: return regs.r15;
-        case 49: return regs.eflags;
-        case 50: return regs.es;
-        case 51: return regs.cs;
-        case 52: return regs.ss;
-        case 53: return regs.fs;
-        case 54: return regs.gs;
-        default: throw std::out_of_range{"Unknown register"};
-        }
+        return get_register_value_from_dwarf_register(m_pid, regnum);
     }
 
     dwarf::taddr deref_size (dwarf::taddr address, unsigned size) {
@@ -378,16 +384,30 @@ void debugger::read_variables() {
     for (const auto& die : func) {
         if (die.tag == DW_TAG::variable) {
             auto loc_val = die[DW_AT::location];
-            if (loc_val.get_type() == dwarf::value::type::exprloc) {
+            if (loc_val.get_type() == value::type::exprloc) {
                 ptrace_expr_context context {m_pid};
                 auto result = loc_val.as_exprloc().evaluate(&context);
 
                 switch (result.location_type) {
-                case expr_result::type::address: std::cout << at_name(die) << ' ' << " in address";
-                case expr_result::type::reg: std::cout << at_name(die) << ' ' << " in regs";
-                case expr_result::type::literal: std::cout << at_name(die) << ' ' << " in literal";
-                case expr_result::type::implicit: std::cout << at_name(die) << ' ' << " in implict";
-                case expr_result::type::empty: std::cout << at_name(die) << ' ' << " empty";
+                case expr_result::type::address:
+                {
+                    auto value = ptrace(PTRACE_PEEKDATA, m_pid, result.value, nullptr);
+                    std::cout << at_name(die) << " (0x" << std::hex << result.value << ") = " << value << std::endl;
+                    break;
+                }
+                
+                case expr_result::type::reg:
+                {
+                    struct user_regs_struct regs;
+                    ptrace(PTRACE_GETREGS, m_pid, nullptr, &regs);
+                    std::cout << "reg is " << result.value << std::endl;
+                    std::cout << "value is " << get_register_value_from_dwarf_register(m_pid, result.value);
+                    break;
+                }
+                    
+                case expr_result::type::literal: std::cout << at_name(die) << ' ' << " in literal" << std::endl; break;
+                case expr_result::type::implicit: std::cout << at_name(die) << ' ' << " in implict" << std::endl; break;
+                case expr_result::type::empty: std::cout << at_name(die) << ' ' << " empty" << std::endl; break;
                 }
             }
             else {
@@ -403,30 +423,45 @@ void debugger::read_memory() {
     std::cout << std::hex << ptrace(PTRACE_PEEKDATA, m_pid, 0x400893, nullptr) << std::endl;
 }
 
+std::vector<std::string> split(const std::string &s) {
+    std::vector<std::string> out{};
+    std::stringstream ss {s};
+    std::string item;
+    
+    while (ss >> item) {
+        out.push_back(item);
+    }
+
+    return out;
+}
+
 void debugger::handle_command(const std::string& line) {
-    if (is_prefix(line, "cont")) {
+    auto args = split(line);
+    auto command = args[0];
+    
+    if (is_prefix(command, "cont")) {
         continue_execution();
     }
-    else if (is_prefix(line, "line")) {
+    else if (is_prefix(command, "line")) {
         auto line_entry = get_current_line_entry();
         std::cout << line_entry.file->path << ':' << line_entry.line << std::endl;
     }
-    else if (is_prefix(line, "registers")) {
+    else if (is_prefix(command, "registers")) {
         dump_registers();
     }
-    else if (is_prefix(line, "pc")) {
+    else if (is_prefix(command, "pc")) {
         std::cout << std::hex << get_pc() << std::endl;
     }
-    else if(is_prefix(line, "break")) {
-        set_breakpoint_at_function("main");
+    else if(is_prefix(command, "break")) {
+        set_breakpoint_at_function(args[1]);
     }
-    else if(is_prefix(line, "step")) {
+    else if(is_prefix(command, "step")) {
         single_step_instruction();
     }
-    else if(is_prefix(line, "memory")) {
+    else if(is_prefix(command, "memory")) {
         read_memory();
     }
-    else if(is_prefix(line, "variables")) {
+    else if(is_prefix(command, "variables")) {
         read_variables();
     }
     else {

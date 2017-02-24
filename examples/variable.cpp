@@ -1,6 +1,6 @@
 int main() {
-    int a = 3;
-    int b = 2;
-    int c = a + b;
+    long a = 3;
+    long b = 2;
+    long c = a + b;
     a = 4;
 }
