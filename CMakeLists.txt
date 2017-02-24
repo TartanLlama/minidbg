@@ -8,7 +8,12 @@ add_executable(minidbg src/minidbg.cpp ext/linenoise/linenoise.c)
 
 add_executable(hello examples/hello.cpp)
 set_target_properties(hello
-                      PROPERTIES COMPILE_FLAGS "-g")
+                      PROPERTIES COMPILE_FLAGS "-g -O0")
+
+add_executable(variable examples/variable.cpp)
+set_target_properties(variable
+                      PROPERTIES COMPILE_FLAGS "-g -O0")
+
 
 add_custom_target(
    libelfin
