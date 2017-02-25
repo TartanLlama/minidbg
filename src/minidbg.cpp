@@ -475,10 +475,6 @@ void debugger::handle_command(const std::string& line) {
     if (is_prefix(command, "cont")) {
         continue_execution();
     }
-    else if (is_prefix(command, "status")) {
-        auto line_entry = get_current_line_entry();
-        print_source(line_entry.file->path, line_entry.line);
-    }
     else if (is_prefix(command, "registers")) {
         dump_registers();
     }
@@ -497,6 +493,10 @@ void debugger::handle_command(const std::string& line) {
     }
     else if(is_prefix(command, "step")) {
         single_step_instruction();
+    }
+    else if (is_prefix(command, "status")) {
+        auto line_entry = get_current_line_entry();
+        print_source(line_entry.file->path, line_entry.line);
     }
     else if(is_prefix(command, "memory")) {
         std::string addr {args[1], 2};
