@@ -59,7 +59,7 @@ public:
     void run();
     void dump_registers();
     uint64_t read_memory(uint64_t address);
-    void print_backtrace();    
+    void print_backtrace();
     void read_variables();
     void continue_execution();
     void single_step_instruction();
@@ -67,7 +67,6 @@ public:
     void set_breakpoint_at_function(const std::string& name);
     void set_breakpoint_at_address(std::intptr_t addr);
     void set_breakpoint_at_source_line(const std::string& file, unsigned line);
-    breakpoint& get_breakpoint_from_pc(uint64_t pc);
     void print_source(const std::string& file_name, unsigned line, unsigned n_lines_context=2);
 
 private:
@@ -240,24 +239,14 @@ void debugger::wait_for_signal() {
     }
 }
 
-breakpoint& debugger::get_breakpoint_from_pc(uint64_t pc) {
-    for (auto&& bp : m_breakpoints) {
-        if (bp.first == pc) {
-            return bp.second;
-        }
-    }
-    throw std::out_of_range{"Cannot find breakpoint"};
-}
-
 void debugger::continue_execution() {
-    try {
-        auto& bp = get_breakpoint_from_pc(get_pc());
+    if (m_breakpoints.count(get_pc())) {
+        auto& bp = m_breakpoints[get_pc()];
         bp.disable();
         unchecked_single_step_instruction();
         bp.enable();
     }
-    catch(...) {}
-    
+
     ptrace(PTRACE_CONT, m_pid, nullptr, nullptr);
     wait_for_signal();
 }
@@ -268,8 +257,8 @@ void debugger::unchecked_single_step_instruction() {
 }
 
 void debugger::single_step_instruction() {
-    try {
-        auto& bp = get_breakpoint_from_pc(get_pc());
+    if (m_breakpoints.count(get_pc())) {
+        auto& bp = m_breakpoints[get_pc()];
         bp.disable();
         unchecked_single_step_instruction();
         bp.enable();
@@ -277,7 +266,6 @@ void debugger::single_step_instruction() {
         print_source(line_entry.file->path, line_entry.line);
         return;
     }
-    catch(...){}
 
     unchecked_single_step_instruction();
     auto line_entry = get_current_line_entry();
@@ -287,8 +275,8 @@ void debugger::single_step_instruction() {
 void debugger::set_breakpoint_at_address(std::intptr_t addr) {
     std::cout << "Set breakpoint at address 0x" << std::hex << addr << std::endl;
     breakpoint bp {m_pid, addr};
-    m_breakpoints[addr] = bp;
     bp.enable();
+    m_breakpoints[addr] = bp;
 }
 
 void debugger::set_breakpoint_at_function(const std::string& name) {
@@ -414,7 +402,7 @@ void debugger::read_variables() {
                     std::cout << at_name(die) << " (0x" << std::hex << result.value << ") = " << value << std::endl;
                     break;
                 }
-                
+
                 case expr_result::type::reg:
                 {
                     struct user_regs_struct regs;
@@ -423,7 +411,7 @@ void debugger::read_variables() {
                     std::cout << "value is " << get_register_value_from_dwarf_register(m_pid, result.value);
                     break;
                 }
-                    
+
                 case expr_result::type::literal: std::cout << at_name(die) << ' ' << " in literal" << std::endl; break;
                 case expr_result::type::implicit: std::cout << at_name(die) << ' ' << " in implict" << std::endl; break;
                 case expr_result::type::empty: std::cout << at_name(die) << ' ' << " empty" << std::endl; break;
@@ -444,7 +432,7 @@ std::vector<std::string> split(const std::string &s) {
     std::vector<std::string> out{};
     std::stringstream ss {s};
     std::string item;
-    
+
     while (ss >> item) {
         out.push_back(item);
     }
@@ -455,8 +443,8 @@ std::vector<std::string> split(const std::string &s) {
 void debugger::print_backtrace() {
     auto frame_number = 0;
     auto current_func = get_function_at_pc(get_pc());
-    
-    auto output_frame = [&frame_number] (auto&& func) {  
+
+    auto output_frame = [&frame_number] (auto&& func) {
         std::cout << "frame #" << frame_number++ << ": 0x" << dwarf::at_low_pc(func)
                   << ' ' << dwarf::at_name(func) << std::endl;
     };
@@ -476,7 +464,7 @@ void debugger::print_backtrace() {
 void debugger::handle_command(const std::string& line) {
     auto args = split(line);
     auto command = args[0];
-    
+
     if (is_prefix(command, "cont")) {
         continue_execution();
     }
