@@ -428,12 +428,12 @@ uint64_t debugger::read_memory(uint64_t address) {
     return ptrace(PTRACE_PEEKDATA, m_pid, address, nullptr);
 }
 
-std::vector<std::string> split(const std::string &s) {
+std::vector<std::string> split(const std::string &s, char delimiter) {
     std::vector<std::string> out{};
     std::stringstream ss {s};
     std::string item;
 
-    while (ss >> item) {
+    while (std::getline(ss,item,delimiter)) {
         out.push_back(item);
     }
 
@@ -462,7 +462,7 @@ void debugger::print_backtrace() {
 }
 
 void debugger::handle_command(const std::string& line) {
-    auto args = split(line);
+    auto args = split(line,' ');
     auto command = args[0];
 
     if (is_prefix(command, "cont")) {
@@ -479,7 +479,17 @@ void debugger::handle_command(const std::string& line) {
         std::cout << std::hex << get_pc() << std::endl;
     }
     else if(is_prefix(command, "break")) {
-        set_breakpoint_at_function(args[1]);
+        if (args[1][0] == '0' && args[1][1] == 'x') {
+            std::string addr {args[1], 2};
+            set_breakpoint_at_address(std::stoi(addr, 0, 16));
+        }
+        else if (args[1].find(':') != std::string::npos) {
+            auto file_and_line = split(args[1], ':');
+            set_breakpoint_at_source_line(file_and_line[0], std::stoi(file_and_line[1]));
+        }
+        else {
+            set_breakpoint_at_function(args[1]);
+        }
     }
     else if(is_prefix(command, "step")) {
         single_step_instruction();
