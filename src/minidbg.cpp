@@ -375,6 +375,13 @@ public:
         return get_register_value_from_dwarf_register(m_pid, regnum);
     }
 
+    dwarf::taddr pc() override {
+        struct user_regs_struct regs;
+        ptrace(PTRACE_GETREGS, m_pid, nullptr, &regs);
+        return regs.rip;
+    }
+
+
     dwarf::taddr deref_size (dwarf::taddr address, unsigned size) {
         //TODO take into account size
         return ptrace(PTRACE_PEEKDATA, m_pid, address, nullptr);
@@ -407,8 +414,8 @@ void debugger::read_variables() {
                 {
                     struct user_regs_struct regs;
                     ptrace(PTRACE_GETREGS, m_pid, nullptr, &regs);
-                    std::cout << "reg is " << result.value << std::endl;
-                    std::cout << "value is " << get_register_value_from_dwarf_register(m_pid, result.value);
+                    auto value = get_register_value_from_dwarf_register(m_pid, result.value);
+                    std::cout << at_name(die) << " (reg " << result.value << ") = " << value << std::endl;
                     break;
                 }
 
@@ -468,20 +475,17 @@ void debugger::handle_command(const std::string& line) {
     if (is_prefix(command, "cont")) {
         continue_execution();
     }
-    else if (is_prefix(command, "line")) {
+    else if (is_prefix(command, "status")) {
         auto line_entry = get_current_line_entry();
-        std::cout << line_entry.file->path << ':' << line_entry.line << std::endl;
+        print_source(line_entry.file->path, line_entry.line);
     }
     else if (is_prefix(command, "registers")) {
         dump_registers();
     }
-    else if (is_prefix(command, "pc")) {
-        std::cout << std::hex << get_pc() << std::endl;
-    }
     else if(is_prefix(command, "break")) {
         if (args[1][0] == '0' && args[1][1] == 'x') {
             std::string addr {args[1], 2};
-            set_breakpoint_at_address(std::stoi(addr, 0, 16));
+            set_breakpoint_at_address(std::stol(addr, 0, 16));
         }
         else if (args[1].find(':') != std::string::npos) {
             auto file_and_line = split(args[1], ':');
@@ -495,7 +499,8 @@ void debugger::handle_command(const std::string& line) {
         single_step_instruction();
     }
     else if(is_prefix(command, "memory")) {
-        read_memory(std::stoi(args[1]));
+        std::string addr {args[1], 2};
+        std::cout << read_memory(std::stol(addr, 0, 16)) << std::endl;
     }
     else if(is_prefix(command, "variables")) {
         read_variables();
