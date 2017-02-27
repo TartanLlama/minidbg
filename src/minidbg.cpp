@@ -22,29 +22,42 @@ class breakpoint {
 public:
     breakpoint() = default;
     breakpoint(pid_t pid, std::intptr_t addr) : m_pid{pid}, m_addr{addr}, m_enabled{false}, m_saved_data{} {}
+
     void enable() {
-        m_saved_data = ptrace(PTRACE_PEEKTEXT, m_pid, (void*)m_addr, 0);
+        m_saved_data = ptrace(PTRACE_PEEKDATA, m_pid, m_addr, nullptr);
         uint64_t int3 = 0xcc;
-        uint64_t data_with_int3 = (m_saved_data & ~0xff | int3);
-        ptrace(PTRACE_POKETEXT, m_pid, (void*)m_addr, data_with_int3);
+        uint64_t data_with_int3 = ((m_saved_data & ~0xff) | int3); //set bottom two bytes to 0xcc
+        ptrace(PTRACE_POKEDATA, m_pid, m_addr, data_with_int3);
 
         m_enabled = true;
     }
 
     void disable() {
-        ptrace(PTRACE_POKETEXT, m_pid, (void*)m_addr, m_saved_data);
+        ptrace(PTRACE_POKEDATA, m_pid, m_addr, m_saved_data);
         m_enabled = false;
     }
 
     bool is_enabled() { return m_enabled; }
 
-    std::intptr_t get_address() { return m_addr; }
+    auto get_address() -> std::intptr_t { return m_addr; }
 private:
     pid_t m_pid;
     std::intptr_t m_addr;
     bool m_enabled;
-    uint64_t m_saved_data;
+    uint64_t m_saved_data; //data which used to be at the breakpoint address
 };
+
+enum class reg {
+    rax, rbx, rcx, rdx,
+    rdi, rsi, rbp, rsp,
+    r8,  r9,  r10, r11,
+    r12, r13, r14, r15,
+    rip, rflags,    cs,
+    fs, gs, ss, ds, es
+};
+
+constexpr std::size_t n_registers = 25;
+
 
 class debugger {
 public:
@@ -58,28 +71,28 @@ public:
 
     void run();
     void dump_registers();
-    uint64_t read_memory(uint64_t address);
+    auto read_memory(uint64_t address) -> uint64_t;
+    void write_memory(uint64_t address, uint64_t value);
     void print_backtrace();
     void read_variables();
     void continue_execution();
     void single_step_instruction();
-    siginfo_t get_signal_info();
+    auto get_signal_info() -> siginfo_t;
     void set_breakpoint_at_function(const std::string& name);
     void set_breakpoint_at_address(std::intptr_t addr);
     void set_breakpoint_at_source_line(const std::string& file, unsigned line);
     void print_source(const std::string& file_name, unsigned line, unsigned n_lines_context=2);
 
 private:
-    void unchecked_single_step_instruction();
+    void unchecked_single_step_instruction(); //single step without checking breakpoints
     void handle_command(const std::string& line);
     void handle_sigtrap(siginfo_t info);
     void wait_for_signal();
-    uint64_t get_pc();
+    auto get_pc() -> uint64_t;
     void set_pc(uint64_t pc);
-    void decrement_pc();
-    dwarf::line_table::entry get_current_line_entry();
-    dwarf::compilation_unit get_current_compilation_unit();
-    dwarf::die get_function_at_pc(uint64_t pc);
+    auto get_current_line_entry() -> dwarf::line_table::entry;
+    auto get_current_compilation_unit() -> dwarf::compilation_unit;
+    auto get_function_at_pc(uint64_t pc) -> dwarf::die;
 
     std::string m_prog_name;
     pid_t m_pid;
@@ -89,24 +102,136 @@ private:
     std::unordered_map<uint64_t,breakpoint> m_breakpoints;
 };
 
+uint64_t get_register_value(pid_t pid, reg r) {
+    struct user_regs_struct regs;
+    ptrace(PTRACE_GETREGS, pid, nullptr, &regs);
+    switch (r) {
+    case reg::rax: return regs.rax;
+    case reg::rbx: return regs.rbx;
+    case reg::rcx: return regs.rcx;
+    case reg::rdx: return regs.rdx;
+    case reg::rdi: return regs.rdi;
+    case reg::rsi: return regs.rsi;
+    case reg::rbp: return regs.rbp;
+    case reg::rsp: return regs.rsp;
+    case reg::r8: return regs.r8;
+    case reg::r9: return regs.r9;
+    case reg::r10: return regs.r10;
+    case reg::r11: return regs.r11;
+    case reg::r12: return regs.r12;
+    case reg::r13: return regs.r13;
+    case reg::r14: return regs.r14;
+    case reg::r15: return regs.r15;
+    case reg::rip: return regs.rip;
+    case reg::rflags: return regs.eflags;
+    case reg::cs: return regs.cs;
+    case reg::fs: return regs.fs;
+    case reg::gs: return regs.gs;
+    case reg::ss: return regs.ss;
+    case reg::ds: return regs.ds;
+    case reg::es: return regs.es;
+    }
+}
+
+void set_register_value(pid_t pid, reg r, uint64_t value) {
+    struct user_regs_struct regs;
+    ptrace(PTRACE_GETREGS, pid, nullptr, &regs);
+    switch (r) {
+    case reg::rax: regs.rax = value; break;
+    case reg::rbx: regs.rbx = value; break;
+    case reg::rcx: regs.rcx = value; break;
+    case reg::rdx: regs.rdx = value; break;
+    case reg::rdi: regs.rdi = value; break;
+    case reg::rsi: regs.rsi = value; break;
+    case reg::rbp: regs.rbp = value; break;
+    case reg::rsp: regs.rsp = value; break;
+    case reg::r8: regs.r8 = value; break;
+    case reg::r9: regs.r9 = value; break;
+    case reg::r10: regs.r10 = value; break;
+    case reg::r11: regs.r11 = value; break;
+    case reg::r12: regs.r12 = value; break;
+    case reg::r13: regs.r13 = value; break;
+    case reg::r14: regs.r14 = value; break;
+    case reg::r15: regs.r15 = value; break;
+    case reg::rip: regs.rip = value; break;
+    case reg::rflags: regs.eflags = value; break;
+    case reg::cs: regs.cs = value; break;
+    case reg::fs: regs.fs = value; break;
+    case reg::gs: regs.gs = value; break;
+    case reg::ss: regs.ss = value; break;
+    case reg::ds: regs.ds = value; break;
+    case reg::es: regs.es = value; break;
+    }
+    ptrace(PTRACE_SETREGS, pid, nullptr, &regs);
+}
+
+uint64_t get_register_value_from_dwarf_register (pid_t pid, unsigned regnum) {
+    reg r;
+
+    switch (regnum) {
+    case 0: r = reg::rax; break;
+    case 1: r = reg::rdx; break;
+    case 2: r = reg::rcx; break;
+    case 3: r = reg::rbx; break;
+    case 4: r = reg::rsi; break;
+    case 5: r = reg::rdi; break;
+    case 6: r = reg::rbp; break;
+    case 7: r = reg::rsp; break;
+    case 8: r = reg::r8; break;
+    case 9: r = reg::r9; break;
+    case 10: r = reg::r10; break;
+    case 11: r = reg::r11; break;
+    case 12: r = reg::r12; break;
+    case 13: r = reg::r13; break;
+    case 14: r = reg::r14; break;
+    case 15: r = reg::r15; break;
+    case 49: r = reg::rflags; break;
+    case 50: r = reg::es; break;
+    case 51: r = reg::cs; break;
+    case 52: r = reg::ss; break;
+    case 53: r = reg::fs; break;
+    case 54: r = reg::gs; break;
+    default: throw std::out_of_range{"Unknown register " + std::to_string(regnum)};
+    }
+
+    return get_register_value(pid, r);
+}
+
+std::string get_register_name(reg r) {
+    switch (r) {
+    case reg::rax: return "rax";
+    case reg::rbx: return "rbx";
+    case reg::rcx: return "rcx";
+    case reg::rdx: return "rdx";
+    case reg::rdi: return "rdi";
+    case reg::rsi: return "rsi";
+    case reg::rbp: return "rbp";
+    case reg::rsp: return "rsp";
+    case reg::r8: return "r8";
+    case reg::r9: return "r9";
+    case reg::r10: return "r10";
+    case reg::r11: return "r11";
+    case reg::r12: return "r12";
+    case reg::r13: return "r13";
+    case reg::r14: return "r14";
+    case reg::r15: return "r15";
+    case reg::rip: return "rip";
+    case reg::rflags: return "rflags";
+    case reg::cs: return "cs";
+    case reg::fs: return "fs";
+    case reg::gs: return "gs";
+    case reg::ss: return "ss";
+    case reg::ds: return "ds";
+    case reg::es: return "es";
+    }
+}
+
 uint64_t debugger::get_pc() {
-  struct user_regs_struct regs;
-  ptrace(PTRACE_GETREGS, m_pid, nullptr, &regs);
-  return regs.rip;
+    return get_register_value(m_pid, reg::rip);
 }
 
 void debugger::set_pc(uint64_t pc) {
-  struct user_regs_struct regs;
-  ptrace(PTRACE_GETREGS, m_pid, nullptr, &regs);
-  regs.rip = pc;
-  ptrace(PTRACE_SETREGS, m_pid, nullptr, &regs);
-}
-
-void debugger::decrement_pc() {
-  struct user_regs_struct regs;
-  ptrace(PTRACE_GETREGS, m_pid, nullptr, &regs);
-  regs.rip -= 1;
-  ptrace(PTRACE_SETREGS, m_pid, nullptr, &regs);
+    set_register_value(m_pid, reg::rip, pc);
 }
 
 dwarf::die debugger::get_function_at_pc(uint64_t pc) {
@@ -152,6 +277,10 @@ dwarf::line_table::entry debugger::get_current_line_entry() {
 }
 
 void debugger::run() {
+    int wait_status;
+    auto options = 0;
+    waitpid(m_pid, &wait_status, options);
+
     char* line = nullptr;
     while((line = linenoise("minidbg> ")) != nullptr) {
         handle_command(line);
@@ -202,15 +331,17 @@ siginfo_t debugger::get_signal_info() {
 
 void debugger::handle_sigtrap(siginfo_t info) {
     switch (info.si_code) {
+    //one of these will be set if a breakpoint was hit
     case SI_KERNEL:
     case TRAP_BRKPT:
     {
-        decrement_pc();
+        set_pc(get_pc()-1);
         std::cout << "Hit breakpoint at address 0x" << std::hex << get_pc() << std::endl;
         auto line_entry = get_current_line_entry();
         print_source(line_entry.file->path, line_entry.line);
         return;
     }
+    //this will be set if the signal was sent by single stepping
     case TRAP_TRACE:
         std::cout << "Finished single stepping" << std::endl;
         return;
@@ -240,6 +371,7 @@ void debugger::wait_for_signal() {
 }
 
 void debugger::continue_execution() {
+    //first, check to see if we need to disable and enable a breakpoint
     if (m_breakpoints.count(get_pc())) {
         auto& bp = m_breakpoints[get_pc()];
         bp.disable();
@@ -257,17 +389,17 @@ void debugger::unchecked_single_step_instruction() {
 }
 
 void debugger::single_step_instruction() {
+    //first, check to see if we need to disable and enable a breakpoint
     if (m_breakpoints.count(get_pc())) {
         auto& bp = m_breakpoints[get_pc()];
         bp.disable();
         unchecked_single_step_instruction();
         bp.enable();
-        auto line_entry = get_current_line_entry();
-        print_source(line_entry.file->path, line_entry.line);
-        return;
+    }
+    else {
+        unchecked_single_step_instruction();
     }
 
-    unchecked_single_step_instruction();
     auto line_entry = get_current_line_entry();
     print_source(line_entry.file->path, line_entry.line);
 }
@@ -282,7 +414,7 @@ void debugger::set_breakpoint_at_address(std::intptr_t addr) {
 void debugger::set_breakpoint_at_function(const std::string& name) {
     for (const auto& cu : m_dwarf.compilation_units()) {
         for (const auto& die : cu.root()) {
-            if (at_name(die) == name) {
+            if (die.has(dwarf::DW_AT::name) && at_name(die) == name) {
                 set_breakpoint_at_address(at_low_pc(die));
                 return;
             }
@@ -307,65 +439,12 @@ void debugger::set_breakpoint_at_source_line(const std::string& file, unsigned l
 
 
 void debugger::dump_registers() {
-    struct user_regs_struct regs;
-    ptrace(PTRACE_GETREGS, m_pid, nullptr, &regs);
-    std::cout << "rax 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.rax << std::endl;
-    std::cout << "rbx 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.rbx << std::endl;
-    std::cout << "rcx 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.rcx << std::endl;
-    std::cout << "rdx 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.rdx << std::endl;
-    std::cout << "rdi 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.rdi << std::endl;
-    std::cout << "rsi 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.rsi << std::endl;
-    std::cout << "rbp 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.rbp << std::endl;
-    std::cout << "rsp 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.rsp << std::endl;
-    std::cout << "r8 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.r8 << std::endl;
-    std::cout << "r9 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.r9 << std::endl;
-    std::cout << "r10 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.r10 << std::endl;
-    std::cout << "r11 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.r11 << std::endl;
-    std::cout << "r12 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.r12 << std::endl;
-    std::cout << "r13 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.r13 << std::endl;
-    std::cout << "r14 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.r14 << std::endl;
-    std::cout << "r15 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.r15 << std::endl;
-    std::cout << "rip 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.rip << std::endl;
-    std::cout << "rflags 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.eflags << std::endl;
-    std::cout << "cs 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.cs << std::endl;
-    std::cout << "fs 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.fs << std::endl;
-    std::cout << "gs 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.gs << std::endl;
-    std::cout << "ss 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.ss << std::endl;
-    std::cout << "ds 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.ds << std::endl;
-    std::cout << "es 0x" << std::setfill('0') << std::setw(16) << std::hex << regs.es << std::endl;
-}
-
-uint64_t get_register_value_from_dwarf_register (pid_t pid, unsigned regnum) {
-    struct user_regs_struct regs;
-    ptrace(PTRACE_GETREGS, pid, nullptr, &regs);
-
-    switch (regnum) {
-    case 0: return regs.rax;
-    case 1: return regs.rdx;
-    case 2: return regs.rcx;
-    case 3: return regs.rbx;
-    case 4: return regs.rsi;
-    case 5: return regs.rdi;
-    case 6: return regs.rbp;
-    case 7: return regs.rsp;
-    case 8: return regs.r8;
-    case 9: return regs.r9;
-    case 10: return regs.r10;
-    case 11: return regs.r11;
-    case 12: return regs.r12;
-    case 13: return regs.r13;
-    case 14: return regs.r14;
-    case 15: return regs.r15;
-    case 49: return regs.eflags;
-    case 50: return regs.es;
-    case 51: return regs.cs;
-    case 52: return regs.ss;
-    case 53: return regs.fs;
-    case 54: return regs.gs;
-    default: throw std::out_of_range{"Unknown register " + std::to_string(regnum)};
+    for (auto i = 0; i < n_registers; ++i) {
+        auto r = static_cast<reg>(i);
+        std::cout << get_register_name(r) << " 0x"
+                  << std::setfill('0') << std::setw(16) << std::hex << get_register_value(m_pid, r) << std::endl;
     }
 }
-
 
 class ptrace_expr_context : public dwarf::expr_context {
 public:
@@ -381,8 +460,7 @@ public:
         return regs.rip;
     }
 
-
-    dwarf::taddr deref_size (dwarf::taddr address, unsigned size) {
+    dwarf::taddr deref_size (dwarf::taddr address, unsigned size) override {
         //TODO take into account size
         return ptrace(PTRACE_PEEKDATA, m_pid, address, nullptr);
     }
@@ -435,6 +513,10 @@ uint64_t debugger::read_memory(uint64_t address) {
     return ptrace(PTRACE_PEEKDATA, m_pid, address, nullptr);
 }
 
+void debugger::write_memory(uint64_t address, uint64_t value) {
+    ptrace(PTRACE_POKEDATA, m_pid, address, value);
+}
+
 std::vector<std::string> split(const std::string &s, char delimiter) {
     std::vector<std::string> out{};
     std::stringstream ss {s};
@@ -453,12 +535,12 @@ void debugger::print_backtrace() {
 
     auto output_frame = [&frame_number] (auto&& func) {
         std::cout << "frame #" << frame_number++ << ": 0x" << dwarf::at_low_pc(func)
-                  << ' ' << dwarf::at_name(func) << std::endl;
+        << ' ' << dwarf::at_name(func) << std::endl;
     };
 
     output_frame(current_func);
 
-    auto frame_pointer = get_register_value_from_dwarf_register(m_pid, 6);
+    auto frame_pointer = get_register_value(m_pid, reg::rbp);
     auto return_address = read_memory(frame_pointer+8);
     while (dwarf::at_name(current_func) != "main") {
         current_func = get_function_at_pc(return_address);
@@ -513,23 +595,20 @@ void debugger::handle_command(const std::string& line) {
     }
 }
 
-void execute_debugger (const std::string& prog_name, pid_t pid) {
-    int wait_status;
-    wait(&wait_status);
-
-    debugger dbg{prog_name, pid};
-    dbg.run();
-}
-
 void execute_debugee (const std::string& prog_name) {
-  if (ptrace(PTRACE_TRACEME, 0, 0, 0) < 0) {
-      std::cerr << "Error in ptrace\n";
-      return;
-  }
-  execl(prog_name.c_str(), prog_name.c_str(), nullptr);
+    if (ptrace(PTRACE_TRACEME, 0, 0, 0) < 0) {
+        std::cerr << "Error in ptrace\n";
+        return;
+    }
+    execl(prog_name.c_str(), prog_name.c_str(), nullptr);
 }
 
 int main(int argc, char* argv[]) {
+    if (argc < 2) {
+        std::cerr << "Program name not specified";
+        return -1;
+    }
+
     auto prog = argv[1];
 
     auto pid = fork();
@@ -540,7 +619,8 @@ int main(int argc, char* argv[]) {
     }
     else if (pid >= 1)  {
         //parent
-        execute_debugger(prog, pid);
+        debugger dbg{prog, pid};
+        dbg.run();
     }
     else {
         std::cerr << "Error forking";
