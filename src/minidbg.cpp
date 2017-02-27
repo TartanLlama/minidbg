@@ -77,6 +77,7 @@ public:
     void read_variables();
     void continue_execution();
     void single_step_instruction();
+    void step_in();
     auto get_signal_info() -> siginfo_t;
     void set_breakpoint_at_function(const std::string& name);
     void set_breakpoint_at_address(std::intptr_t addr);
@@ -90,7 +91,7 @@ private:
     void wait_for_signal();
     auto get_pc() -> uint64_t;
     void set_pc(uint64_t pc);
-    auto get_current_line_entry() -> dwarf::line_table::entry;
+    auto get_line_entry_from_pc(uint64_t pc) -> dwarf::line_table::iterator;
     auto get_current_compilation_unit() -> dwarf::compilation_unit;
     auto get_function_at_pc(uint64_t pc) -> dwarf::die;
 
@@ -98,8 +99,7 @@ private:
     pid_t m_pid;
     dwarf::dwarf m_dwarf;
     elf::elf m_elf;
-    unsigned m_saved_data;
-    std::unordered_map<uint64_t,breakpoint> m_breakpoints;
+    std::unordered_map<std::intptr_t,breakpoint> m_breakpoints;
 };
 
 uint64_t get_register_value(pid_t pid, reg r) {
@@ -257,9 +257,7 @@ dwarf::compilation_unit debugger::get_current_compilation_unit() {
     throw std::out_of_range{"Cannot find compilation unit"};
 }
 
-dwarf::line_table::entry debugger::get_current_line_entry() {
-    auto pc = get_pc();
-
+dwarf::line_table::iterator debugger::get_line_entry_from_pc(uint64_t pc) {
     for (auto &cu : m_dwarf.compilation_units()) {
         if (die_pc_range(cu.root()).contains(pc)) {
             auto &lt = cu.get_line_table();
@@ -268,7 +266,7 @@ dwarf::line_table::entry debugger::get_current_line_entry() {
                 throw std::out_of_range{"Cannot find line entry"};
             }
             else {
-                return *it;
+                return it;
             }
         }
     }
@@ -291,7 +289,7 @@ void debugger::run() {
 
 void debugger::print_source(const std::string& file_name, unsigned line, unsigned n_lines_context) {
     std::ifstream file {file_name};
-    auto start_line = line < n_lines_context ? 1 : line - n_lines_context;
+    auto start_line = line <= n_lines_context ? 1 : line - n_lines_context;
     auto end_line = line + n_lines_context + (line < n_lines_context ? n_lines_context - line : 0) + 1;
 
     char c{};
@@ -337,13 +335,12 @@ void debugger::handle_sigtrap(siginfo_t info) {
     {
         set_pc(get_pc()-1);
         std::cout << "Hit breakpoint at address 0x" << std::hex << get_pc() << std::endl;
-        auto line_entry = get_current_line_entry();
-        print_source(line_entry.file->path, line_entry.line);
+        auto line_entry = get_line_entry_from_pc(get_pc());
+        print_source(line_entry->file->path, line_entry->line);
         return;
     }
     //this will be set if the signal was sent by single stepping
     case TRAP_TRACE:
-        std::cout << "Finished single stepping" << std::endl;
         return;
     default:
         std::cout << "Unknown SIGTRAP code " << info.si_code << std::endl;
@@ -388,6 +385,24 @@ void debugger::unchecked_single_step_instruction() {
     wait_for_signal();
 }
 
+void debugger::step_in() {
+    auto line = get_line_entry_from_pc(get_pc())->line;
+
+    if (m_breakpoints.count(get_pc())) {
+        auto& bp = m_breakpoints[get_pc()];
+        bp.disable();
+        unchecked_single_step_instruction();
+        bp.enable();
+    }
+
+    while (get_line_entry_from_pc(get_pc())->line == line) {
+        unchecked_single_step_instruction();
+    }
+
+    auto line_entry = get_line_entry_from_pc(get_pc());
+    print_source(line_entry->file->path, line_entry->line);
+}
+
 void debugger::single_step_instruction() {
     //first, check to see if we need to disable and enable a breakpoint
     if (m_breakpoints.count(get_pc())) {
@@ -400,8 +415,8 @@ void debugger::single_step_instruction() {
         unchecked_single_step_instruction();
     }
 
-    auto line_entry = get_current_line_entry();
-    print_source(line_entry.file->path, line_entry.line);
+    auto line_entry = get_line_entry_from_pc(get_pc());
+    print_source(line_entry->file->path, line_entry->line);
 }
 
 void debugger::set_breakpoint_at_address(std::intptr_t addr) {
@@ -415,7 +430,10 @@ void debugger::set_breakpoint_at_function(const std::string& name) {
     for (const auto& cu : m_dwarf.compilation_units()) {
         for (const auto& die : cu.root()) {
             if (die.has(dwarf::DW_AT::name) && at_name(die) == name) {
-                set_breakpoint_at_address(at_low_pc(die));
+                auto low_pc = at_low_pc(die);
+                auto entry = get_line_entry_from_pc(low_pc);
+                ++entry;
+                set_breakpoint_at_address(entry->address);
                 return;
             }
         }
@@ -573,11 +591,14 @@ void debugger::handle_command(const std::string& line) {
         }
     }
     else if(is_prefix(command, "step")) {
+        step_in();
+    }
+    else if(is_prefix(command, "stepi")) {
         single_step_instruction();
     }
     else if (is_prefix(command, "status")) {
-        auto line_entry = get_current_line_entry();
-        print_source(line_entry.file->path, line_entry.line);
+        auto line_entry = get_line_entry_from_pc(get_pc());
+        print_source(line_entry->file->path, line_entry->line);
     }
     else if(is_prefix(command, "memory")) {
         std::string addr {args[1], 2};
@@ -620,8 +641,5 @@ int main(int argc, char* argv[]) {
         //parent
         debugger dbg{prog, pid};
         dbg.run();
-    }
-    else {
-        std::cerr << "Error forking";
     }
 }
