@@ -437,7 +437,6 @@ void debugger::set_breakpoint_at_source_line(const std::string& file, unsigned l
     }
 }
 
-
 void debugger::dump_registers() {
     for (auto i = 0; i < n_registers; ++i) {
         auto r = static_cast<reg>(i);
@@ -473,9 +472,12 @@ void debugger::read_variables() {
     using namespace dwarf;
 
     auto func = get_function_at_pc(get_pc());
+
     for (const auto& die : func) {
         if (die.tag == DW_TAG::variable) {
             auto loc_val = die[DW_AT::location];
+
+            //only supports exprlocs for now
             if (loc_val.get_type() == value::type::exprloc) {
                 ptrace_expr_context context {m_pid};
                 auto result = loc_val.as_exprloc().evaluate(&context);
@@ -483,23 +485,20 @@ void debugger::read_variables() {
                 switch (result.location_type) {
                 case expr_result::type::address:
                 {
-                    auto value = ptrace(PTRACE_PEEKDATA, m_pid, result.value, nullptr);
+                    auto value = read_memory(result.value);
                     std::cout << at_name(die) << " (0x" << std::hex << result.value << ") = " << value << std::endl;
                     break;
                 }
 
                 case expr_result::type::reg:
                 {
-                    struct user_regs_struct regs;
-                    ptrace(PTRACE_GETREGS, m_pid, nullptr, &regs);
                     auto value = get_register_value_from_dwarf_register(m_pid, result.value);
                     std::cout << at_name(die) << " (reg " << result.value << ") = " << value << std::endl;
                     break;
                 }
 
-                case expr_result::type::literal: std::cout << at_name(die) << ' ' << " in literal" << std::endl; break;
-                case expr_result::type::implicit: std::cout << at_name(die) << ' ' << " in implict" << std::endl; break;
-                case expr_result::type::empty: std::cout << at_name(die) << ' ' << " empty" << std::endl; break;
+                default:
+                    throw std::runtime_error{"Unhandled variable location"};
                 }
             }
             else {
