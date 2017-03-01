@@ -1,4 +1,5 @@
 #include <string>
+#include <algorithm>
 #include <unordered_map>
 #include <vector>
 #include <fstream>
@@ -53,10 +54,12 @@ enum class reg {
     r8,  r9,  r10, r11,
     r12, r13, r14, r15,
     rip, rflags,    cs,
+    orig_rax, fs_base,
+    gs_base,
     fs, gs, ss, ds, es
 };
 
-constexpr std::size_t n_registers = 25;
+constexpr std::size_t n_registers = 27;
 
 
 class debugger {
@@ -105,132 +108,87 @@ private:
     std::unordered_map<std::intptr_t,breakpoint> m_breakpoints;
 };
 
+struct reg_descriptor {
+    reg r;
+    int dwarf_r;
+    std::string name;
+};
+
+//have a look in /usr/include/sys/user.h for how to lay this out
+std::array<reg_descriptor, n_registers> g_register_descriptors {{
+    { reg::r15, 15, "r15" },
+    { reg::r14, 14, "r14" },
+    { reg::r13, 13, "r13" },
+    { reg::r12, 12, "r12" },
+    { reg::rbp, 6, "rbp" },
+    { reg::rbx, 3, "rbx" },
+    { reg::r11, 11, "r11" },
+    { reg::r10, 10, "r10" },
+    { reg::r9, 9, "r9" },        
+    { reg::r8, 8, "r8" },
+    { reg::rax, 0, "rax" },
+    { reg::rcx, 2, "rcx" },
+    { reg::rdx, 1, "rdx" },
+    { reg::rsi, 4, "rsi" },
+    { reg::rdi, 5, "rdi" },
+    { reg::orig_rax, -1, "orig_rax" },        
+    { reg::rip, -1, "rip" },
+    { reg::cs, 51, "cs" },
+    { reg::rflags, 49, "eflags" },
+    { reg::rsp, 7, "rsp" },
+    { reg::ss, 52, "ss" },
+    { reg::fs_base, 58, "fs_base" },
+    { reg::gs_base, 59, "gs_base" },        
+    { reg::ds, 53, "ds" },
+    { reg::es, 50, "es" },
+    { reg::fs, 54, "fs" },
+    { reg::gs, 55, "gs" },
+}};
+
 uint64_t get_register_value(pid_t pid, reg r) {
-    struct user_regs_struct regs;
+    user_regs_struct regs;
     ptrace(PTRACE_GETREGS, pid, nullptr, &regs);
-    switch (r) {
-    case reg::rax: return regs.rax;
-    case reg::rbx: return regs.rbx;
-    case reg::rcx: return regs.rcx;
-    case reg::rdx: return regs.rdx;
-    case reg::rdi: return regs.rdi;
-    case reg::rsi: return regs.rsi;
-    case reg::rbp: return regs.rbp;
-    case reg::rsp: return regs.rsp;
-    case reg::r8: return regs.r8;
-    case reg::r9: return regs.r9;
-    case reg::r10: return regs.r10;
-    case reg::r11: return regs.r11;
-    case reg::r12: return regs.r12;
-    case reg::r13: return regs.r13;
-    case reg::r14: return regs.r14;
-    case reg::r15: return regs.r15;
-    case reg::rip: return regs.rip;
-    case reg::rflags: return regs.eflags;
-    case reg::cs: return regs.cs;
-    case reg::fs: return regs.fs;
-    case reg::gs: return regs.gs;
-    case reg::ss: return regs.ss;
-    case reg::ds: return regs.ds;
-    case reg::es: return regs.es;
-    }
+    auto it = std::find_if(begin(g_register_descriptors), end(g_register_descriptors),
+                           [r](auto&& rd) { return rd.r == r; });
+
+    return *(reinterpret_cast<uint64_t*>(&regs) + (it - begin(g_register_descriptors)));
 }
 
 void set_register_value(pid_t pid, reg r, uint64_t value) {
-    struct user_regs_struct regs;
+    user_regs_struct regs;
     ptrace(PTRACE_GETREGS, pid, nullptr, &regs);
-    switch (r) {
-    case reg::rax: regs.rax = value; break;
-    case reg::rbx: regs.rbx = value; break;
-    case reg::rcx: regs.rcx = value; break;
-    case reg::rdx: regs.rdx = value; break;
-    case reg::rdi: regs.rdi = value; break;
-    case reg::rsi: regs.rsi = value; break;
-    case reg::rbp: regs.rbp = value; break;
-    case reg::rsp: regs.rsp = value; break;
-    case reg::r8: regs.r8 = value; break;
-    case reg::r9: regs.r9 = value; break;
-    case reg::r10: regs.r10 = value; break;
-    case reg::r11: regs.r11 = value; break;
-    case reg::r12: regs.r12 = value; break;
-    case reg::r13: regs.r13 = value; break;
-    case reg::r14: regs.r14 = value; break;
-    case reg::r15: regs.r15 = value; break;
-    case reg::rip: regs.rip = value; break;
-    case reg::rflags: regs.eflags = value; break;
-    case reg::cs: regs.cs = value; break;
-    case reg::fs: regs.fs = value; break;
-    case reg::gs: regs.gs = value; break;
-    case reg::ss: regs.ss = value; break;
-    case reg::ds: regs.ds = value; break;
-    case reg::es: regs.es = value; break;
-    }
+    auto it = std::find_if(begin(g_register_descriptors), end(g_register_descriptors),
+                           [r](auto&& rd) { return rd.r == r; });
+    
+    *(reinterpret_cast<uint64_t*>(&regs) + (it - begin(g_register_descriptors))) = value;
     ptrace(PTRACE_SETREGS, pid, nullptr, &regs);
 }
 
 uint64_t get_register_value_from_dwarf_register (pid_t pid, unsigned regnum) {
-    reg r;
-
-    switch (regnum) {
-    case 0: r = reg::rax; break;
-    case 1: r = reg::rdx; break;
-    case 2: r = reg::rcx; break;
-    case 3: r = reg::rbx; break;
-    case 4: r = reg::rsi; break;
-    case 5: r = reg::rdi; break;
-    case 6: r = reg::rbp; break;
-    case 7: r = reg::rsp; break;
-    case 8: r = reg::r8; break;
-    case 9: r = reg::r9; break;
-    case 10: r = reg::r10; break;
-    case 11: r = reg::r11; break;
-    case 12: r = reg::r12; break;
-    case 13: r = reg::r13; break;
-    case 14: r = reg::r14; break;
-    case 15: r = reg::r15; break;
-    case 49: r = reg::rflags; break;
-    case 50: r = reg::es; break;
-    case 51: r = reg::cs; break;
-    case 52: r = reg::ss; break;
-    case 53: r = reg::fs; break;
-    case 54: r = reg::gs; break;
-    default: throw std::out_of_range{"Unknown register " + std::to_string(regnum)};
+    auto it = std::find_if(begin(g_register_descriptors), end(g_register_descriptors),
+                           [regnum](auto&& rd) { return rd.dwarf_r == regnum; });
+    if (it == end(g_register_descriptors)) {
+        throw std::out_of_range{"Unknown dwarf register"};
     }
 
-    return get_register_value(pid, r);
+    return get_register_value(pid, it->r);
 }
 
 std::string get_register_name(reg r) {
-    switch (r) {
-    case reg::rax: return "rax";
-    case reg::rbx: return "rbx";
-    case reg::rcx: return "rcx";
-    case reg::rdx: return "rdx";
-    case reg::rdi: return "rdi";
-    case reg::rsi: return "rsi";
-    case reg::rbp: return "rbp";
-    case reg::rsp: return "rsp";
-    case reg::r8: return "r8";
-    case reg::r9: return "r9";
-    case reg::r10: return "r10";
-    case reg::r11: return "r11";
-    case reg::r12: return "r12";
-    case reg::r13: return "r13";
-    case reg::r14: return "r14";
-    case reg::r15: return "r15";
-    case reg::rip: return "rip";
-    case reg::rflags: return "rflags";
-    case reg::cs: return "cs";
-    case reg::fs: return "fs";
-    case reg::gs: return "gs";
-    case reg::ss: return "ss";
-    case reg::ds: return "ds";
-    case reg::es: return "es";
-    }
+    auto it = std::find_if(begin(g_register_descriptors), end(g_register_descriptors),
+                           [r](auto&& rd) { return rd.r == r; });
+    return it->name;
 }
 
+reg get_register_from_name(const std::string& name) {
+    auto it = std::find_if(begin(g_register_descriptors), end(g_register_descriptors),
+                           [name](auto&& rd) { return rd.name == name; });
+    return it->r;
+}
+
+
 uint64_t debugger::get_pc() {
-    return get_register_value(m_pid, reg::rip);
+    get_register_value(m_pid, reg::rip);
 }
 
 void debugger::set_pc(uint64_t pc) {
@@ -489,10 +447,9 @@ void debugger::set_breakpoint_at_source_line(const std::string& file, unsigned l
 }
 
 void debugger::dump_registers() {
-    for (auto i = 0; i < n_registers; ++i) {
-        auto r = static_cast<reg>(i);
-        std::cout << get_register_name(r) << " 0x"
-                  << std::setfill('0') << std::setw(16) << std::hex << get_register_value(m_pid, r) << std::endl;
+    for (const auto& rd : g_register_descriptors) {
+        std::cout << rd.name << " 0x"
+                  << std::setfill('0') << std::setw(16) << std::hex << get_register_value(m_pid, rd.r) << std::endl;
     }
 }
 
@@ -607,8 +564,16 @@ void debugger::handle_command(const std::string& line) {
     if (is_prefix(command, "cont")) {
         continue_execution();
     }
-    else if (is_prefix(command, "registers")) {
-        dump_registers();
+    else if (is_prefix(command, "register")) {
+        if (is_prefix(args[1], "dump")) {
+            dump_registers();
+        }
+        else if (is_prefix(args[1], "read")) {
+            std::cout << get_register_value(m_pid, get_register_from_name(args[2])) << std::endl;
+        }
+        else if (is_prefix(args[1], "write")) {
+            set_register_value(m_pid, get_register_from_name(args[2]), std::stol(args[3]));
+        }        
     }
     else if(is_prefix(command, "break")) {
         if (args[1][0] == '0' && args[1][1] == 'x') {
@@ -640,8 +605,14 @@ void debugger::handle_command(const std::string& line) {
         print_source(line_entry->file->path, line_entry->line);
     }
     else if(is_prefix(command, "memory")) {
-        std::string addr {args[1], 2};
-        std::cout << read_memory(std::stol(addr, 0, 16)) << std::endl;
+        std::string addr {args[2], 2};
+        
+        if (is_prefix(args[1], "read")) {
+            std::cout << read_memory(std::stol(addr, 0, 16)) << std::endl;
+        }
+        if (is_prefix(args[1], "write")) {
+            write_memory(std::stol(addr, 0, 16), std::stol(args[3]));
+        }
     }
     else if(is_prefix(command, "variables")) {
         read_variables();
