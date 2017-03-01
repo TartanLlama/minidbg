@@ -78,6 +78,8 @@ public:
     void continue_execution();
     void single_step_instruction();
     void step_in();
+    void step_out();
+    void step_over();        
     auto get_signal_info() -> siginfo_t;
     void set_breakpoint_at_function(const std::string& name);
     void set_breakpoint_at_address(std::intptr_t addr);
@@ -86,6 +88,7 @@ public:
 
 private:
     void unchecked_single_step_instruction(); //single step without checking breakpoints
+    void step_over_breakpoint();    
     void handle_command(const std::string& line);
     void handle_sigtrap(siginfo_t info);
     void wait_for_signal();
@@ -93,7 +96,7 @@ private:
     void set_pc(uint64_t pc);
     auto get_line_entry_from_pc(uint64_t pc) -> dwarf::line_table::iterator;
     auto get_current_compilation_unit() -> dwarf::compilation_unit;
-    auto get_function_at_pc(uint64_t pc) -> dwarf::die;
+    auto get_function_from_pc(uint64_t pc) -> dwarf::die;
 
     std::string m_prog_name;
     pid_t m_pid;
@@ -234,7 +237,7 @@ void debugger::set_pc(uint64_t pc) {
     set_register_value(m_pid, reg::rip, pc);
 }
 
-dwarf::die debugger::get_function_at_pc(uint64_t pc) {
+dwarf::die debugger::get_function_from_pc(uint64_t pc) {
     auto cu = get_current_compilation_unit();
     for (const auto& die : cu.root()) {
         if (die.tag == dwarf::DW_TAG::subprogram) {
@@ -368,14 +371,7 @@ void debugger::wait_for_signal() {
 }
 
 void debugger::continue_execution() {
-    //first, check to see if we need to disable and enable a breakpoint
-    if (m_breakpoints.count(get_pc())) {
-        auto& bp = m_breakpoints[get_pc()];
-        bp.disable();
-        unchecked_single_step_instruction();
-        bp.enable();
-    }
-
+    step_over_breakpoint();
     ptrace(PTRACE_CONT, m_pid, nullptr, nullptr);
     wait_for_signal();
 }
@@ -385,15 +381,55 @@ void debugger::unchecked_single_step_instruction() {
     wait_for_signal();
 }
 
-void debugger::step_in() {
-    auto line = get_line_entry_from_pc(get_pc())->line;
-
+void debugger::step_over_breakpoint() {
     if (m_breakpoints.count(get_pc())) {
         auto& bp = m_breakpoints[get_pc()];
         bp.disable();
         unchecked_single_step_instruction();
         bp.enable();
     }
+}
+
+void debugger::step_over() {
+    step_over_breakpoint();
+    
+    auto func_entry = at_low_pc(get_function_from_pc(get_pc()));
+
+    auto frame_pointer = get_register_value(m_pid, reg::rbp);
+    auto return_address = read_memory(frame_pointer+8);
+    auto return_entry = 0;
+    try {
+        return_entry = at_low_pc(get_function_from_pc(return_address));
+    }
+    catch(...){}
+        
+
+
+    auto line = get_line_entry_from_pc(get_pc())->line;
+    
+    while ((get_line_entry_from_pc(get_pc())->line == line ||
+            at_low_pc(get_function_from_pc(get_pc())) != func_entry)
+           && at_low_pc(get_function_from_pc(get_pc())) != return_entry) {
+        unchecked_single_step_instruction();
+    }
+
+    auto line_entry = get_line_entry_from_pc(get_pc());
+    print_source(line_entry->file->path, line_entry->line);
+}
+
+void debugger::step_out() {
+    step_over_breakpoint();
+
+    auto frame_pointer = get_register_value(m_pid, reg::rbp);
+    auto return_address = read_memory(frame_pointer+8);
+    set_breakpoint_at_address(return_address);
+    continue_execution();
+}
+
+void debugger::step_in() {
+    step_over_breakpoint();
+    
+    auto line = get_line_entry_from_pc(get_pc())->line;
 
     while (get_line_entry_from_pc(get_pc())->line == line) {
         unchecked_single_step_instruction();
@@ -406,10 +442,7 @@ void debugger::step_in() {
 void debugger::single_step_instruction() {
     //first, check to see if we need to disable and enable a breakpoint
     if (m_breakpoints.count(get_pc())) {
-        auto& bp = m_breakpoints[get_pc()];
-        bp.disable();
-        unchecked_single_step_instruction();
-        bp.enable();
+        step_over_breakpoint();
     }
     else {
         unchecked_single_step_instruction();
@@ -489,7 +522,7 @@ private:
 void debugger::read_variables() {
     using namespace dwarf;
 
-    auto func = get_function_at_pc(get_pc());
+    auto func = get_function_from_pc(get_pc());
 
     for (const auto& die : func) {
         if (die.tag == DW_TAG::variable) {
@@ -548,7 +581,7 @@ std::vector<std::string> split(const std::string &s, char delimiter) {
 
 void debugger::print_backtrace() {
     auto frame_number = 0;
-    auto current_func = get_function_at_pc(get_pc());
+    auto current_func = get_function_from_pc(get_pc());
 
     auto output_frame = [&frame_number] (auto&& func) {
         std::cout << "frame #" << frame_number++ << ": 0x" << dwarf::at_low_pc(func)
@@ -560,7 +593,7 @@ void debugger::print_backtrace() {
     auto frame_pointer = get_register_value(m_pid, reg::rbp);
     auto return_address = read_memory(frame_pointer+8);
     while (dwarf::at_name(current_func) != "main") {
-        current_func = get_function_at_pc(return_address);
+        current_func = get_function_from_pc(return_address);
         output_frame(current_func);
         frame_pointer = read_memory(frame_pointer);
         return_address = read_memory(frame_pointer+8);
@@ -592,6 +625,12 @@ void debugger::handle_command(const std::string& line) {
     }
     else if(is_prefix(command, "step")) {
         step_in();
+    }
+    else if(is_prefix(command, "next")) {
+        step_over();
+    }
+    else if(is_prefix(command, "finish")) {
+        step_out();
     }
     else if(is_prefix(command, "stepi")) {
         single_step_instruction();
