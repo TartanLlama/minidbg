@@ -22,26 +22,19 @@ void debugger::set_pc(uint64_t pc) {
 }
 
 dwarf::die debugger::get_function_from_pc(uint64_t pc) {
-    auto cu = get_current_compilation_unit();
-    for (const auto& die : cu.root()) {
-        if (die.tag == dwarf::DW_TAG::subprogram) {
-            if (die_pc_range(die).contains(pc)) {
-                return die;
+    for (auto &cu : m_dwarf.compilation_units()) {
+        if (die_pc_range(cu.root()).contains(get_pc())) {
+            for (const auto& die : cu.root()) {
+                if (die.tag == dwarf::DW_TAG::subprogram) {
+                    if (die_pc_range(die).contains(pc)) {
+                        return die;
+                    }
+                }
             }
         }
     }
 
     throw std::out_of_range{"Cannot find function"};
-}
-
-dwarf::compilation_unit debugger::get_current_compilation_unit() {
-    for (auto &cu : m_dwarf.compilation_units()) {
-        if (die_pc_range(cu.root()).contains(get_pc())) {
-            return cu;
-        }
-    }
-
-    throw std::out_of_range{"Cannot find compilation unit"};
 }
 
 dwarf::line_table::iterator debugger::get_line_entry_from_pc(uint64_t pc) {
@@ -160,7 +153,7 @@ void debugger::continue_execution() {
     wait_for_signal();
 }
 
-void debugger::unchecked_single_step_instruction() {
+void debugger::single_step_instruction() {
     ptrace(PTRACE_SINGLESTEP, m_pid, nullptr, nullptr);
     wait_for_signal();
 }
@@ -168,9 +161,11 @@ void debugger::unchecked_single_step_instruction() {
 void debugger::step_over_breakpoint() {
     if (m_breakpoints.count(get_pc())) {
         auto& bp = m_breakpoints[get_pc()];
-        bp.disable();
-        unchecked_single_step_instruction();
-        bp.enable();
+        if (bp.is_enabled()) {
+            bp.disable();
+            single_step_instruction();
+            bp.enable();
+        }
     }
 }
 
@@ -194,7 +189,7 @@ void debugger::step_over() {
     while ((get_line_entry_from_pc(get_pc())->line == line ||
             at_low_pc(get_function_from_pc(get_pc())) != func_entry)
            && at_low_pc(get_function_from_pc(get_pc())) != return_entry) {
-        unchecked_single_step_instruction();
+        single_step_instruction();
     }
 
     auto line_entry = get_line_entry_from_pc(get_pc());
@@ -216,20 +211,20 @@ void debugger::step_in() {
     auto line = get_line_entry_from_pc(get_pc())->line;
 
     while (get_line_entry_from_pc(get_pc())->line == line) {
-        unchecked_single_step_instruction();
+        single_step_instruction();
     }
 
     auto line_entry = get_line_entry_from_pc(get_pc());
     print_source(line_entry->file->path, line_entry->line);
 }
 
-void debugger::single_step_instruction() {
+void debugger::single_step_instruction_with_breakpoint_check() {
     //first, check to see if we need to disable and enable a breakpoint
     if (m_breakpoints.count(get_pc())) {
         step_over_breakpoint();
     }
     else {
-        unchecked_single_step_instruction();
+        single_step_instruction();
     }
 
     auto line_entry = get_line_entry_from_pc(get_pc());
@@ -424,7 +419,9 @@ void debugger::handle_command(const std::string& line) {
         step_out();
     }
     else if(is_prefix(command, "stepi")) {
-        single_step_instruction();
+        single_step_instruction_with_breakpoint_check();
+        auto line_entry = get_line_entry_from_pc(get_pc());
+        print_source(line_entry->file->path, line_entry->line);
     }
     else if (is_prefix(command, "status")) {
         auto line_entry = get_line_entry_from_pc(get_pc());

@@ -29,7 +29,7 @@ namespace minidbg {
         void print_backtrace();
         void read_variables();
         void continue_execution();
-        void single_step_instruction();
+        void single_step_instruction_with_breakpoint_check();
         void step_in();
         void step_out();
         void step_over();        
@@ -40,7 +40,7 @@ namespace minidbg {
         void print_source(const std::string& file_name, unsigned line, unsigned n_lines_context=2);
 
     private:
-        void unchecked_single_step_instruction(); //single step without checking breakpoints
+        void single_step_instruction(); //single step without checking breakpoints
         void step_over_breakpoint();    
         void handle_command(const std::string& line);
         void handle_sigtrap(siginfo_t info);
@@ -48,7 +48,6 @@ namespace minidbg {
         auto get_pc() -> uint64_t;
         void set_pc(uint64_t pc);
         auto get_line_entry_from_pc(uint64_t pc) -> dwarf::line_table::iterator;
-        auto get_current_compilation_unit() -> dwarf::compilation_unit;
         auto get_function_from_pc(uint64_t pc) -> dwarf::die;
 
         std::string m_prog_name;
