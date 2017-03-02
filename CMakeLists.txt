@@ -3,11 +3,8 @@ project (MiniDbg)
 
 add_compile_options(-std=c++14)
 
-include_directories(ext/libelfin ext/linenoise)
+include_directories(ext/libelfin ext/linenoise include)
 add_executable(minidbg src/minidbg.cpp ext/linenoise/linenoise.c)
-set_target_properties(minidbg
-                      PROPERTIES COMPILE_FLAGS "-g -O0")
-
 
 add_executable(hello examples/hello.cpp)
 set_target_properties(hello
@@ -20,7 +17,6 @@ set_target_properties(variable
 add_executable(unwinding examples/stack_unwinding.cpp)
 set_target_properties(unwinding
                       PROPERTIES COMPILE_FLAGS "-g -O0")
-
 
 
 add_custom_target(
