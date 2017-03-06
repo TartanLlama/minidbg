@@ -170,48 +170,61 @@ void debugger::step_over_breakpoint() {
 }
 
 void debugger::step_over() {
-    step_over_breakpoint();
+    auto func = get_function_from_pc(get_pc());
+    auto func_entry = at_low_pc(func);
+    auto func_end = at_high_pc(func);
     
-    auto func_entry = at_low_pc(get_function_from_pc(get_pc()));
+    auto line = get_line_entry_from_pc(func_entry);
+    auto start_line = get_line_entry_from_pc(get_pc());
 
+    std::vector<std::intptr_t> breakpoints_to_remove{};
+
+    //set breakpoints on all lines apart from the current one if they don't already have one set
+    while (line->address < func_end) {
+        if (line->address != start_line->address && !m_breakpoints.count(line->address)) {
+            set_breakpoint_at_address(line->address);
+            breakpoints_to_remove.push_back(line->address);
+        }
+        ++line;
+    }
+
+    //set breakpoint on return address
     auto frame_pointer = get_register_value(m_pid, reg::rbp);
     auto return_address = read_memory(frame_pointer+8);
-    auto return_entry = 0;
-    try {
-        return_entry = at_low_pc(get_function_from_pc(return_address));
+    if (!m_breakpoints.count(return_address)) {
+        set_breakpoint_at_address(return_address);
+        breakpoints_to_remove.push_back(return_address);
     }
-    catch(...){}
-        
-
-
-    auto line = get_line_entry_from_pc(get_pc())->line;
     
-    while ((get_line_entry_from_pc(get_pc())->line == line ||
-            at_low_pc(get_function_from_pc(get_pc())) != func_entry)
-           && at_low_pc(get_function_from_pc(get_pc())) != return_entry) {
-        single_step_instruction();
-    }
+    continue_execution();
 
-    auto line_entry = get_line_entry_from_pc(get_pc());
-    print_source(line_entry->file->path, line_entry->line);
+    for (auto addr : breakpoints_to_remove) {
+        remove_breakpoint(addr);
+    }
 }
 
 void debugger::step_out() {
-    step_over_breakpoint();
-
     auto frame_pointer = get_register_value(m_pid, reg::rbp);
     auto return_address = read_memory(frame_pointer+8);
-    set_breakpoint_at_address(return_address);
+
+    bool should_remove_breakpoint = false;
+    if (!m_breakpoints.count(return_address)) {
+        set_breakpoint_at_address(return_address);
+        should_remove_breakpoint = true;
+    }
+    
     continue_execution();
+
+    if (should_remove_breakpoint) {
+        remove_breakpoint(return_address);
+    }
 }
 
 void debugger::step_in() {
-    step_over_breakpoint();
+   auto line = get_line_entry_from_pc(get_pc())->line;
     
-    auto line = get_line_entry_from_pc(get_pc())->line;
-
     while (get_line_entry_from_pc(get_pc())->line == line) {
-        single_step_instruction();
+        single_step_instruction_with_breakpoint_check();
     }
 
     auto line_entry = get_line_entry_from_pc(get_pc());
@@ -229,6 +242,13 @@ void debugger::single_step_instruction_with_breakpoint_check() {
 
     auto line_entry = get_line_entry_from_pc(get_pc());
     print_source(line_entry->file->path, line_entry->line);
+}
+
+void debugger::remove_breakpoint(std::intptr_t addr) {
+    if (m_breakpoints.at(addr).is_enabled()) {
+        m_breakpoints.at(addr).disable();
+    }
+    m_breakpoints.erase(addr);
 }
 
 void debugger::set_breakpoint_at_address(std::intptr_t addr) {

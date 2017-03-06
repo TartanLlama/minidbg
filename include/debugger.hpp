@@ -34,6 +34,7 @@ namespace minidbg {
         void step_out();
         void step_over();        
         auto get_signal_info() -> siginfo_t;
+        void remove_breakpoint(std::intptr_t addr);
         void set_breakpoint_at_function(const std::string& name);
         void set_breakpoint_at_address(std::intptr_t addr);
         void set_breakpoint_at_source_line(const std::string& file, unsigned line);
