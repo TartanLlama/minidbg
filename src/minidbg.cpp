@@ -264,9 +264,8 @@ void debugger::set_breakpoint_at_function(const std::string& name) {
             if (die.has(dwarf::DW_AT::name) && at_name(die) == name) {
                 auto low_pc = at_low_pc(die);
                 auto entry = get_line_entry_from_pc(low_pc);
-                ++entry;
+                ++entry; //skip prologue
                 set_breakpoint_at_address(entry->address);
-                return;
             }
         }
     }
@@ -496,3 +495,4 @@ int main(int argc, char* argv[]) {
         dbg.run();
     }
 }
+
