@@ -13,7 +13,7 @@ namespace minidbg {
         void enable() {
             m_saved_data = ptrace(PTRACE_PEEKDATA, m_pid, m_addr, nullptr);
             uint64_t int3 = 0xcc;
-            uint64_t data_with_int3 = ((m_saved_data & ~0xff) | int3); //set bottom two bytes to 0xcc
+            uint64_t data_with_int3 = ((m_saved_data & ~0xff) | int3); //set bottom byte to 0xcc
             ptrace(PTRACE_POKEDATA, m_pid, m_addr, data_with_int3);
 
             m_enabled = true;
@@ -24,9 +24,9 @@ namespace minidbg {
             m_enabled = false;
         }
 
-        bool is_enabled() { return m_enabled; }
+        bool is_enabled() const { return m_enabled; }
 
-        auto get_address() -> std::intptr_t { return m_addr; }
+        auto get_address() const -> std::intptr_t { return m_addr; }
     private:
         pid_t m_pid;
         std::intptr_t m_addr;
