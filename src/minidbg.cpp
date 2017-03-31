@@ -173,7 +173,7 @@ void debugger::step_over() {
     auto func = get_function_from_pc(get_pc());
     auto func_entry = at_low_pc(func);
     auto func_end = at_high_pc(func);
-    
+
     auto line = get_line_entry_from_pc(func_entry);
     auto start_line = get_line_entry_from_pc(get_pc());
 
@@ -195,7 +195,7 @@ void debugger::step_over() {
         set_breakpoint_at_address(return_address);
         breakpoints_to_remove.push_back(return_address);
     }
-    
+
     continue_execution();
 
     for (auto addr : breakpoints_to_remove) {
@@ -212,7 +212,7 @@ void debugger::step_out() {
         set_breakpoint_at_address(return_address);
         should_remove_breakpoint = true;
     }
-    
+
     continue_execution();
 
     if (should_remove_breakpoint) {
@@ -222,7 +222,7 @@ void debugger::step_out() {
 
 void debugger::step_in() {
    auto line = get_line_entry_from_pc(get_pc())->line;
-    
+
     while (get_line_entry_from_pc(get_pc())->line == line) {
         single_step_instruction_with_breakpoint_check();
     }
@@ -404,17 +404,7 @@ void debugger::handle_command(const std::string& line) {
     if (is_prefix(command, "cont")) {
         continue_execution();
     }
-    else if (is_prefix(command, "register")) {
-        if (is_prefix(args[1], "dump")) {
-            dump_registers();
-        }
-        else if (is_prefix(args[1], "read")) {
-            std::cout << get_register_value(m_pid, get_register_from_name(args[2])) << std::endl;
-        }
-        else if (is_prefix(args[1], "write")) {
-            set_register_value(m_pid, get_register_from_name(args[2]), std::stol(args[3]));
-        }        
-    }
+
     else if(is_prefix(command, "break")) {
         if (args[1][0] == '0' && args[1][1] == 'x') {
             std::string addr {args[1], 2};
@@ -428,40 +418,63 @@ void debugger::handle_command(const std::string& line) {
             set_breakpoint_at_function(args[1]);
         }
     }
+
     else if(is_prefix(command, "step")) {
         step_in();
     }
+
     else if(is_prefix(command, "next")) {
         step_over();
     }
+
     else if(is_prefix(command, "finish")) {
         step_out();
     }
+
     else if(is_prefix(command, "stepi")) {
         single_step_instruction_with_breakpoint_check();
         auto line_entry = get_line_entry_from_pc(get_pc());
         print_source(line_entry->file->path, line_entry->line);
     }
+
     else if (is_prefix(command, "status")) {
         auto line_entry = get_line_entry_from_pc(get_pc());
         print_source(line_entry->file->path, line_entry->line);
     }
-    else if(is_prefix(command, "memory")) {
-        std::string addr {args[2], 2};
-        
-        if (is_prefix(args[1], "read")) {
-            std::cout << read_memory(std::stol(addr, 0, 16)) << std::endl;
+
+    else if (is_prefix(command, "register")) {
+        if (is_prefix(args[1], "dump")) {
+            dump_registers();
         }
-        if (is_prefix(args[1], "write")) {
-            write_memory(std::stol(addr, 0, 16), std::stol(args[3]));
+        else if (is_prefix(args[1], "read")) {
+            std::cout << get_register_value(m_pid, get_register_from_name(args[2])) << std::endl;
+        }
+        else if (is_prefix(args[1], "write")) {
+            std::string val {args[3], 2}; //assume 0xVAL
+            set_register_value(m_pid, get_register_from_name(args[2]), std::stol(val, 0, 16));
         }
     }
+
+    else if(is_prefix(command, "memory")) {
+        std::string addr {args[2], 2}; //assume 0xADDRESS
+
+        if (is_prefix(args[1], "read")) {
+            std::cout << std::hex << read_memory(std::stol(addr, 0, 16)) << std::endl;
+        }
+        if (is_prefix(args[1], "write")) {
+            std::string val {args[3], 2}; //assume 0xVAL
+            write_memory(std::stol(addr, 0, 16), std::stol(val, 0, 16));
+        }
+    }
+
     else if(is_prefix(command, "variables")) {
         read_variables();
     }
+
     else if(is_prefix(command, "backtrace")) {
         print_backtrace();
     }
+
     else {
         std::cerr << "Unknown command\n";
     }
@@ -495,4 +508,3 @@ int main(int argc, char* argv[]) {
         dbg.run();
     }
 }
-
