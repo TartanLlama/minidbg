@@ -23,7 +23,7 @@ void debugger::set_pc(uint64_t pc) {
 
 dwarf::die debugger::get_function_from_pc(uint64_t pc) {
     for (auto &cu : m_dwarf.compilation_units()) {
-        if (die_pc_range(cu.root()).contains(get_pc())) {
+        if (die_pc_range(cu.root()).contains(pc)) {
             for (const auto& die : cu.root()) {
                 if (die.tag == dwarf::DW_TAG::subprogram) {
                     if (die_pc_range(die).contains(pc)) {
@@ -173,7 +173,7 @@ void debugger::step_over() {
     auto func = get_function_from_pc(get_pc());
     auto func_entry = at_low_pc(func);
     auto func_end = at_high_pc(func);
-    
+
     auto line = get_line_entry_from_pc(func_entry);
     auto start_line = get_line_entry_from_pc(get_pc());
 
@@ -195,7 +195,7 @@ void debugger::step_over() {
         set_breakpoint_at_address(return_address);
         breakpoints_to_remove.push_back(return_address);
     }
-    
+
     continue_execution();
 
     for (auto addr : breakpoints_to_remove) {
@@ -212,7 +212,7 @@ void debugger::step_out() {
         set_breakpoint_at_address(return_address);
         should_remove_breakpoint = true;
     }
-    
+
     continue_execution();
 
     if (should_remove_breakpoint) {
@@ -222,7 +222,7 @@ void debugger::step_out() {
 
 void debugger::step_in() {
    auto line = get_line_entry_from_pc(get_pc())->line;
-    
+
     while (get_line_entry_from_pc(get_pc())->line == line) {
         single_step_instruction_with_breakpoint_check();
     }
@@ -413,7 +413,7 @@ void debugger::handle_command(const std::string& line) {
         }
         else if (is_prefix(args[1], "write")) {
             set_register_value(m_pid, get_register_from_name(args[2]), std::stol(args[3]));
-        }        
+        }
     }
     else if(is_prefix(command, "break")) {
         if (args[1][0] == '0' && args[1][1] == 'x') {
@@ -448,7 +448,7 @@ void debugger::handle_command(const std::string& line) {
     }
     else if(is_prefix(command, "memory")) {
         std::string addr {args[2], 2};
-        
+
         if (is_prefix(args[1], "read")) {
             std::cout << read_memory(std::stol(addr, 0, 16)) << std::endl;
         }
@@ -495,4 +495,3 @@ int main(int argc, char* argv[]) {
         dbg.run();
     }
 }
-
