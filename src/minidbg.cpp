@@ -13,6 +13,35 @@
 
 using namespace minidbg;
 
+symbol_type to_symbol_type(elf::stt sym) {
+    switch (sym) {
+    case elf::stt::notype: return symbol_type::notype;
+    case elf::stt::object: return symbol_type::object;
+    case elf::stt::func: return symbol_type::func;
+    case elf::stt::section: return symbol_type::section;
+    case elf::stt::file: return symbol_type::file;
+    default: return symbol_type::notype;
+    }
+};
+
+std::vector<symbol> debugger::lookup_symbol(const std::string& name) {
+    std::vector<symbol> syms;
+
+    for (auto &sec : m_elf.sections()) {
+        if (sec.get_hdr().type != elf::sht::symtab && sec.get_hdr().type != elf::sht::dynsym)
+            continue;
+
+        for (auto sym : sec.as_symtab()) {
+            if (sym.get_name() == name) {
+                auto &d = sym.get_data();
+                syms.push_back(symbol{to_symbol_type(d.type()), sym.get_name(), d.value});
+            }
+        }
+    }
+
+    return syms;
+}
+
 uint64_t debugger::get_pc() {
     return get_register_value(m_pid, reg::rip);
 }
@@ -473,6 +502,13 @@ void debugger::handle_command(const std::string& line) {
 
     else if(is_prefix(command, "backtrace")) {
         print_backtrace();
+    }
+
+    else if(is_prefix(command, "symbol")) {
+        auto syms = lookup_symbol(args[1]);
+        for (auto&& s : syms) {
+            std::cout << s.name << ' ' << to_string(s.type) << " 0x" << std::hex << s.addr << std::endl;
+        }
     }
 
     else {
