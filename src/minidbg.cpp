@@ -406,12 +406,11 @@ std::vector<std::string> split(const std::string &s, char delimiter) {
 }
 
 void debugger::print_backtrace() {
-    auto frame_number = 0;
     auto current_func = get_function_from_pc(get_pc());
 
-    auto output_frame = [&frame_number] (auto&& func) {
+    auto output_frame = [frame_number = 0] (auto&& func) mutable {
         std::cout << "frame #" << frame_number++ << ": 0x" << dwarf::at_low_pc(func)
-        << ' ' << dwarf::at_name(func) << std::endl;
+                  << ' ' << dwarf::at_name(func) << std::endl;
     };
 
     output_frame(current_func);
