@@ -19,6 +19,26 @@
 
 using namespace minidbg;
 
+void debugger::print_backtrace() {
+    auto output_frame = [frame_number = 0] (auto&& func) mutable {
+        std::cout << "frame #" << frame_number++ << ": 0x" << dwarf::at_low_pc(func)
+                  << ' ' << dwarf::at_name(func) << std::endl;
+    };
+
+    auto current_func = get_function_from_pc(get_pc());
+    output_frame(current_func);
+
+    auto frame_pointer = get_register_value(m_pid, reg::rbp);
+    auto return_address = read_memory(frame_pointer+8);
+
+    while (dwarf::at_name(current_func) != "main") {
+        current_func = get_function_from_pc(return_address);
+        output_frame(current_func);
+        frame_pointer = read_memory(frame_pointer);
+        return_address = read_memory(frame_pointer+8);
+    }
+}
+
 symbol_type to_symbol_type(elf::stt sym) {
     switch (sym) {
     case elf::stt::notype: return symbol_type::notype;
@@ -238,7 +258,7 @@ void debugger::handle_command(const std::string& line) {
         else {
             set_breakpoint_at_function(args[1]);
         }
-    }    
+    }
     else if (is_prefix(command, "register")) {
         if (is_prefix(args[1], "dump")) {
             dump_registers();
@@ -262,12 +282,15 @@ void debugger::handle_command(const std::string& line) {
             write_memory(std::stol(addr, 0, 16), std::stol(val, 0, 16));
         }
     }
+    else if(is_prefix(command, "backtrace")) {
+        print_backtrace();
+    }
     else if(is_prefix(command, "symbol")) {
         auto syms = lookup_symbol(args[1]);
         for (auto&& s : syms) {
             std::cout << s.name << ' ' << to_string(s.type) << " 0x" << std::hex << s.addr << std::endl;
         }
-    }    
+    }
     else {
         std::cerr << "Unknown command\n";
     }
