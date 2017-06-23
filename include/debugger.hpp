@@ -34,7 +34,7 @@ namespace minidbg {
         std::string name;
         std::uintptr_t addr;
     };
-    
+
     class debugger {
     public:
         debugger (std::string prog_name, pid_t pid)
@@ -48,10 +48,16 @@ namespace minidbg {
         void run();
         void set_breakpoint_at_address(std::intptr_t addr);
         void set_breakpoint_at_function(const std::string& name);
-        void set_breakpoint_at_source_line(const std::string& file, unsigned line);        
+        void set_breakpoint_at_source_line(const std::string& file, unsigned line);
         void dump_registers();
         void print_source(const std::string& file_name, unsigned line, unsigned n_lines_context=2);
         auto lookup_symbol(const std::string& name) -> std::vector<symbol>;
+        void single_step_instruction();
+        void single_step_instruction_with_breakpoint_check();
+        void step_in();
+        void step_over();
+        void step_out();
+        void remove_breakpoint(std::intptr_t addr);
 
     private:
         void handle_command(const std::string& line);
