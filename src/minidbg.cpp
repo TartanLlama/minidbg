@@ -1,6 +1,7 @@
 #include <vector>
 #include <sys/ptrace.h>
 #include <sys/wait.h>
+#include <sys/personality.h>
 #include <unistd.h>
 #include <sstream>
 #include <fstream>
@@ -19,6 +20,7 @@
 
 using namespace minidbg;
 
+<<<<<<< HEAD
 symbol_type to_symbol_type(elf::stt sym) {
     switch (sym) {
     case elf::stt::notype: return symbol_type::notype;
@@ -46,6 +48,24 @@ std::vector<symbol> debugger::lookup_symbol(const std::string& name) {
     }
 
     return syms;
+=======
+void debugger::initialise_load_address() {
+   //If this is a dynamic library (e.g. PIE)
+   if (m_elf.get_hdr().type == elf::et::dyn) {
+      //The load address is found in /proc/<pid>/maps
+      std::ifstream map("/proc/" + std::to_string(m_pid) + "/maps");
+
+      //Read the first address from the file
+      std::string addr;
+      std::getline(map, addr, '-');
+
+      m_load_address = std::stoi(addr, 0, 16);
+   }
+}
+
+uint64_t debugger::offset_load_address(uint64_t addr) {
+   return addr - m_load_address;
+>>>>>>> tut_dwarf_step
 }
 
 void debugger::remove_breakpoint(std::intptr_t addr) {
@@ -73,7 +93,11 @@ void debugger::step_out() {
 }
 
 void debugger::step_in() {
+<<<<<<< HEAD
     auto line = get_line_entry_from_pc(get_pc())->line;
+=======
+   auto line = get_line_entry_from_pc(get_pc())->line;
+>>>>>>> tut_dwarf_step
 
     while (get_line_entry_from_pc(get_pc())->line == line) {
         single_step_instruction_with_breakpoint_check();
@@ -148,10 +172,10 @@ void debugger::set_pc(uint64_t pc) {
 
 dwarf::die debugger::get_function_from_pc(uint64_t pc) {
     for (auto &cu : m_dwarf.compilation_units()) {
-        if (die_pc_range(cu.root()).contains(pc)) {
+        if (die_pc_range(cu.root()).contains(offset_load_address(pc))) {
             for (const auto& die : cu.root()) {
                 if (die.tag == dwarf::DW_TAG::subprogram) {
-                    if (die_pc_range(die).contains(pc)) {
+                    if (die_pc_range(die).contains(offset_load_address(pc))) {
                         return die;
                     }
                 }
@@ -164,9 +188,9 @@ dwarf::die debugger::get_function_from_pc(uint64_t pc) {
 
 dwarf::line_table::iterator debugger::get_line_entry_from_pc(uint64_t pc) {
     for (auto &cu : m_dwarf.compilation_units()) {
-        if (die_pc_range(cu.root()).contains(pc)) {
+        if (die_pc_range(cu.root()).contains(offset_load_address(pc))) {
             auto &lt = cu.get_line_table();
-            auto it = lt.find_address(pc);
+            auto it = lt.find_address(offset_load_address(pc));
             if (it == lt.end()) {
                 throw std::out_of_range{"Cannot find line entry"};
             }
@@ -270,7 +294,6 @@ void debugger::handle_sigtrap(siginfo_t info) {
     }
 }
 
-
 void debugger::continue_execution() {
     step_over_breakpoint();
     ptrace(PTRACE_CONT, m_pid, nullptr, nullptr);
@@ -330,6 +353,15 @@ void debugger::handle_command(const std::string& line) {
     else if(is_prefix(command, "finish")) {
         step_out();
     }
+    else if(is_prefix(command, "step")) {
+        step_in();
+    }
+    else if(is_prefix(command, "next")) {
+        step_over();
+    }
+    else if(is_prefix(command, "finish")) {
+        step_out();
+    }
     else if (is_prefix(command, "register")) {
         if (is_prefix(args[1], "dump")) {
             dump_registers();
@@ -353,12 +385,15 @@ void debugger::handle_command(const std::string& line) {
             write_memory(std::stol(addr, 0, 16), std::stol(val, 0, 16));
         }
     }
+<<<<<<< HEAD
     else if(is_prefix(command, "symbol")) {
         auto syms = lookup_symbol(args[1]);
         for (auto&& s : syms) {
             std::cout << s.name << ' ' << to_string(s.type) << " 0x" << std::hex << s.addr << std::endl;
         }
     }
+=======
+>>>>>>> tut_dwarf_step
     else if(is_prefix(command, "stepi")) {
         single_step_instruction_with_breakpoint_check();
         auto line_entry = get_line_entry_from_pc(get_pc());
@@ -412,6 +447,7 @@ void debugger::set_breakpoint_at_address(std::intptr_t addr) {
 
 void debugger::run() {
     wait_for_signal();
+    initialise_load_address();
 
     char* line = nullptr;
     while((line = linenoise("minidbg> ")) != nullptr) {
@@ -440,11 +476,12 @@ int main(int argc, char* argv[]) {
     auto pid = fork();
     if (pid == 0) {
         //child
+        personality(ADDR_NO_RANDOMIZE);
         execute_debugee(prog);
-
     }
     else if (pid >= 1)  {
         //parent
+        std::cout << "Started debugging process " << pid << '\n';
         debugger dbg{prog, pid};
         dbg.run();
     }
