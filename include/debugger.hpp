@@ -53,6 +53,7 @@ namespace minidbg {
         void print_backtrace();
         void print_source(const std::string& file_name, unsigned line, unsigned n_lines_context=2);
         auto lookup_symbol(const std::string& name) -> std::vector<symbol>;
+
         void single_step_instruction();
         void single_step_instruction_with_breakpoint_check();
         void step_in();
@@ -64,12 +65,17 @@ namespace minidbg {
         void handle_command(const std::string& line);
         void continue_execution();
         auto get_pc() -> uint64_t;
+        auto get_offset_pc() -> uint64_t;
         void set_pc(uint64_t pc);
         void step_over_breakpoint();
         void wait_for_signal();
         auto get_signal_info() -> siginfo_t;
 
         void handle_sigtrap(siginfo_t info);
+
+        void initialise_load_address();
+        uint64_t offset_load_address(uint64_t addr);
+        uint64_t offset_dwarf_address(uint64_t addr);
 
         auto get_function_from_pc(uint64_t pc) -> dwarf::die;
         auto get_line_entry_from_pc(uint64_t pc) -> dwarf::line_table::iterator;
@@ -79,6 +85,7 @@ namespace minidbg {
 
         std::string m_prog_name;
         pid_t m_pid;
+        uint64_t m_load_address = 0;
         std::unordered_map<std::intptr_t,breakpoint> m_breakpoints;
         dwarf::dwarf m_dwarf;
         elf::elf m_elf;
