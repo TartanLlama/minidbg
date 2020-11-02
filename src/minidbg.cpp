@@ -38,6 +38,10 @@ uint64_t debugger::offset_load_address(uint64_t addr) {
    return addr - m_load_address;
 }
 
+uint64_t debugger::offset_dwarf_address(uint64_t addr) {
+   return addr + m_load_address;
+}
+
 void debugger::remove_breakpoint(std::intptr_t addr) {
     if (m_breakpoints.at(addr).is_enabled()) {
         m_breakpoints.at(addr).disable();
@@ -63,30 +67,31 @@ void debugger::step_out() {
 }
 
 void debugger::step_in() {
-   auto line = get_line_entry_from_pc(get_pc())->line;
+   auto line = get_line_entry_from_pc(get_offset_pc())->line;
 
-    while (get_line_entry_from_pc(get_pc())->line == line) {
-        single_step_instruction_with_breakpoint_check();
-    }
+   while (get_line_entry_from_pc(get_offset_pc())->line == line) {
+      single_step_instruction_with_breakpoint_check();
+   }
 
-    auto line_entry = get_line_entry_from_pc(get_pc());
-    print_source(line_entry->file->path, line_entry->line);
+   auto line_entry = get_line_entry_from_pc(get_offset_pc());
+   print_source(line_entry->file->path, line_entry->line);
 }
 
 void debugger::step_over() {
-    auto func = get_function_from_pc(get_pc());
+    auto func = get_function_from_pc(get_offset_pc());
     auto func_entry = at_low_pc(func);
     auto func_end = at_high_pc(func);
 
     auto line = get_line_entry_from_pc(func_entry);
-    auto start_line = get_line_entry_from_pc(get_pc());
+    auto start_line = get_line_entry_from_pc(get_offset_pc());
 
     std::vector<std::intptr_t> to_delete{};
 
     while (line->address < func_end) {
-        if (line->address != start_line->address && !m_breakpoints.count(line->address)) {
-            set_breakpoint_at_address(line->address);
-            to_delete.push_back(line->address);
+        auto load_address = offset_dwarf_address(line->address);
+        if (line->address != start_line->address && !m_breakpoints.count(load_address)) {
+            set_breakpoint_at_address(load_address);
+            to_delete.push_back(load_address);
         }
         ++line;
     }
@@ -130,6 +135,10 @@ void debugger::write_memory(uint64_t address, uint64_t value) {
 
 uint64_t debugger::get_pc() {
     return get_register_value(m_pid, reg::rip);
+}
+
+uint64_t debugger::get_offset_pc() {
+   return offset_load_address(get_pc());
 }
 
 void debugger::set_pc(uint64_t pc) {

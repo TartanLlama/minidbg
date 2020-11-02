@@ -36,6 +36,7 @@ namespace minidbg {
         void handle_command(const std::string& line);
         void continue_execution();
         auto get_pc() -> uint64_t;
+        auto get_offset_pc() -> uint64_t;
         void set_pc(uint64_t pc);
         void step_over_breakpoint();
         void wait_for_signal();
@@ -45,6 +46,7 @@ namespace minidbg {
 
         void initialise_load_address();
         uint64_t offset_load_address(uint64_t addr);
+        uint64_t offset_dwarf_address(uint64_t addr);
 
         auto get_function_from_pc(uint64_t pc) -> dwarf::die;
         auto get_line_entry_from_pc(uint64_t pc) -> dwarf::line_table::iterator;
