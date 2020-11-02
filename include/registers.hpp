@@ -23,7 +23,7 @@ namespace minidbg {
         int dwarf_r;
         std::string name;
     };
-    
+
     //have a look in /usr/include/sys/user.h for how to lay this out
     static const std::array<reg_descriptor, n_registers> g_register_descriptors {{
             { reg::r15, 15, "r15" },
@@ -34,21 +34,21 @@ namespace minidbg {
             { reg::rbx, 3, "rbx" },
             { reg::r11, 11, "r11" },
             { reg::r10, 10, "r10" },
-            { reg::r9, 9, "r9" },        
+            { reg::r9, 9, "r9" },
             { reg::r8, 8, "r8" },
             { reg::rax, 0, "rax" },
             { reg::rcx, 2, "rcx" },
             { reg::rdx, 1, "rdx" },
             { reg::rsi, 4, "rsi" },
             { reg::rdi, 5, "rdi" },
-            { reg::orig_rax, -1, "orig_rax" },        
+            { reg::orig_rax, -1, "orig_rax" },
             { reg::rip, -1, "rip" },
             { reg::cs, 51, "cs" },
             { reg::rflags, 49, "eflags" },
             { reg::rsp, 7, "rsp" },
             { reg::ss, 52, "ss" },
             { reg::fs_base, 58, "fs_base" },
-            { reg::gs_base, 59, "gs_base" },        
+            { reg::gs_base, 59, "gs_base" },
             { reg::ds, 53, "ds" },
             { reg::es, 50, "es" },
             { reg::fs, 54, "fs" },
@@ -69,7 +69,7 @@ namespace minidbg {
         ptrace(PTRACE_GETREGS, pid, nullptr, &regs);
         auto it = std::find_if(begin(g_register_descriptors), end(g_register_descriptors),
                                [r](auto&& rd) { return rd.r == r; });
-    
+
         *(reinterpret_cast<uint64_t*>(&regs) + (it - begin(g_register_descriptors))) = value;
         ptrace(PTRACE_SETREGS, pid, nullptr, &regs);
     }
