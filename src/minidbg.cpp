@@ -271,6 +271,7 @@ int main(int argc, char* argv[]) {
     }
     else if (pid >= 1)  {
         //parent
+        std::cout << "Started debugging process " << pid << '\n';
         debugger dbg{prog, pid};
         dbg.run();
     }
