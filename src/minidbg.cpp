@@ -20,6 +20,24 @@
 
 using namespace minidbg;
 
+void debugger::initialise_load_address() {
+   //If this is a dynamic library (e.g. PIE)
+   if (m_elf.get_hdr().type == elf::et::dyn) {
+      //The load address is found in /proc/<pid>/maps
+      std::ifstream map("/proc/" + std::to_string(m_pid) + "/maps");
+
+      //Read the first address from the file
+      std::string addr;
+      std::getline(map, addr, '-');
+
+      m_load_address = std::stoi(addr, 0, 16);
+   }
+}
+
+uint64_t debugger::offset_load_address(uint64_t addr) {
+   return addr - m_load_address;
+}
+
 void debugger::remove_breakpoint(std::intptr_t addr) {
     if (m_breakpoints.at(addr).is_enabled()) {
         m_breakpoints.at(addr).disable();
@@ -120,10 +138,10 @@ void debugger::set_pc(uint64_t pc) {
 
 dwarf::die debugger::get_function_from_pc(uint64_t pc) {
     for (auto &cu : m_dwarf.compilation_units()) {
-        if (die_pc_range(cu.root()).contains(pc)) {
+        if (die_pc_range(cu.root()).contains(offset_load_address(pc))) {
             for (const auto& die : cu.root()) {
                 if (die.tag == dwarf::DW_TAG::subprogram) {
-                    if (die_pc_range(die).contains(pc)) {
+                    if (die_pc_range(die).contains(offset_load_address(pc))) {
                         return die;
                     }
                 }
@@ -136,9 +154,9 @@ dwarf::die debugger::get_function_from_pc(uint64_t pc) {
 
 dwarf::line_table::iterator debugger::get_line_entry_from_pc(uint64_t pc) {
     for (auto &cu : m_dwarf.compilation_units()) {
-        if (die_pc_range(cu.root()).contains(pc)) {
+        if (die_pc_range(cu.root()).contains(offset_load_address(pc))) {
             auto &lt = cu.get_line_table();
-            auto it = lt.find_address(pc);
+            auto it = lt.find_address(offset_load_address(pc));
             if (it == lt.end()) {
                 throw std::out_of_range{"Cannot find line entry"};
             }
@@ -242,7 +260,6 @@ void debugger::handle_sigtrap(siginfo_t info) {
     }
 }
 
-
 void debugger::continue_execution() {
     step_over_breakpoint();
     ptrace(PTRACE_CONT, m_pid, nullptr, nullptr);
@@ -335,6 +352,7 @@ void debugger::set_breakpoint_at_address(std::intptr_t addr) {
 
 void debugger::run() {
     wait_for_signal();
+    initialise_load_address();
 
     char* line = nullptr;
     while((line = linenoise("minidbg> ")) != nullptr) {
