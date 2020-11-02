@@ -67,6 +67,10 @@ uint64_t debugger::offset_load_address(uint64_t addr) {
    return addr - m_load_address;
 }
 
+uint64_t debugger::offset_dwarf_address(uint64_t addr) {
+   return addr + m_load_address;
+}
+
 void debugger::remove_breakpoint(std::intptr_t addr) {
     if (m_breakpoints.at(addr).is_enabled()) {
         m_breakpoints.at(addr).disable();
@@ -92,30 +96,31 @@ void debugger::step_out() {
 }
 
 void debugger::step_in() {
-    auto line = get_line_entry_from_pc(get_pc())->line;
+   auto line = get_line_entry_from_pc(get_offset_pc())->line;
 
-    while (get_line_entry_from_pc(get_pc())->line == line) {
-        single_step_instruction_with_breakpoint_check();
-    }
+   while (get_line_entry_from_pc(get_offset_pc())->line == line) {
+      single_step_instruction_with_breakpoint_check();
+   }
 
-    auto line_entry = get_line_entry_from_pc(get_pc());
-    print_source(line_entry->file->path, line_entry->line);
+   auto line_entry = get_line_entry_from_pc(get_offset_pc());
+   print_source(line_entry->file->path, line_entry->line);
 }
 
 void debugger::step_over() {
-    auto func = get_function_from_pc(get_pc());
+    auto func = get_function_from_pc(get_offset_pc());
     auto func_entry = at_low_pc(func);
     auto func_end = at_high_pc(func);
 
     auto line = get_line_entry_from_pc(func_entry);
-    auto start_line = get_line_entry_from_pc(get_pc());
+    auto start_line = get_line_entry_from_pc(get_offset_pc());
 
     std::vector<std::intptr_t> to_delete{};
 
     while (line->address < func_end) {
-        if (line->address != start_line->address && !m_breakpoints.count(line->address)) {
-            set_breakpoint_at_address(line->address);
-            to_delete.push_back(line->address);
+        auto load_address = offset_dwarf_address(line->address);
+        if (line->address != start_line->address && !m_breakpoints.count(load_address)) {
+            set_breakpoint_at_address(load_address);
+            to_delete.push_back(load_address);
         }
         ++line;
     }
@@ -161,16 +166,20 @@ uint64_t debugger::get_pc() {
     return get_register_value(m_pid, reg::rip);
 }
 
+uint64_t debugger::get_offset_pc() {
+   return offset_load_address(get_pc());
+}
+
 void debugger::set_pc(uint64_t pc) {
     set_register_value(m_pid, reg::rip, pc);
 }
 
 dwarf::die debugger::get_function_from_pc(uint64_t pc) {
     for (auto &cu : m_dwarf.compilation_units()) {
-        if (die_pc_range(cu.root()).contains(offset_load_address(pc))) {
+        if (die_pc_range(cu.root()).contains(pc)) {
             for (const auto& die : cu.root()) {
                 if (die.tag == dwarf::DW_TAG::subprogram) {
-                    if (die_pc_range(die).contains(offset_load_address(pc))) {
+                    if (die_pc_range(die).contains(pc)) {
                         return die;
                     }
                 }
@@ -183,9 +192,9 @@ dwarf::die debugger::get_function_from_pc(uint64_t pc) {
 
 dwarf::line_table::iterator debugger::get_line_entry_from_pc(uint64_t pc) {
     for (auto &cu : m_dwarf.compilation_units()) {
-        if (die_pc_range(cu.root()).contains(offset_load_address(pc))) {
+        if (die_pc_range(cu.root()).contains(pc)) {
             auto &lt = cu.get_line_table();
-            auto it = lt.find_address(offset_load_address(pc));
+            auto it = lt.find_address(pc);
             if (it == lt.end()) {
                 throw std::out_of_range{"Cannot find line entry"};
             }
@@ -276,7 +285,8 @@ void debugger::handle_sigtrap(siginfo_t info) {
     {
         set_pc(get_pc()-1);
         std::cout << "Hit breakpoint at address 0x" << std::hex << get_pc() << std::endl;
-        auto line_entry = get_line_entry_from_pc(get_pc());
+        auto offset_pc = offset_load_address(get_pc()); //rember to offset the pc for querying DWARF
+        auto line_entry = get_line_entry_from_pc(offset_pc);
         print_source(line_entry->file->path, line_entry->line);
         return;
     }
