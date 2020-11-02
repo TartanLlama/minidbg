@@ -1,6 +1,7 @@
 #include <vector>
 #include <sys/ptrace.h>
 #include <sys/wait.h>
+#include <sys/personality.h>
 #include <unistd.h>
 #include <sstream>
 #include <fstream>
@@ -89,14 +90,14 @@ void debugger::print_backtrace() {
                   << ' ' << dwarf::at_name(func) << std::endl;
     };
 
-    auto current_func = get_function_from_pc(get_pc());
+    auto current_func = get_function_from_pc(offset_load_address(get_pc()));
     output_frame(current_func);
 
     auto frame_pointer = get_register_value(m_pid, reg::rbp);
     auto return_address = read_memory(frame_pointer+8);
 
     while (dwarf::at_name(current_func) != "main") {
-        current_func = get_function_from_pc(return_address);
+        current_func = get_function_from_pc(offset_load_address(return_address));
         output_frame(current_func);
         frame_pointer = read_memory(frame_pointer);
         return_address = read_memory(frame_pointer+8);
@@ -115,21 +116,43 @@ symbol_type to_symbol_type(elf::stt sym) {
 };
 
 std::vector<symbol> debugger::lookup_symbol(const std::string& name) {
-    std::vector<symbol> syms;
+   std::vector<symbol> syms;
 
-    for (auto &sec : m_elf.sections()) {
-        if (sec.get_hdr().type != elf::sht::symtab && sec.get_hdr().type != elf::sht::dynsym)
-            continue;
+   for (auto& sec : m_elf.sections()) {
+      if (sec.get_hdr().type != elf::sht::symtab && sec.get_hdr().type != elf::sht::dynsym)
+         continue;
 
-        for (auto sym : sec.as_symtab()) {
-            if (sym.get_name() == name) {
-                auto &d = sym.get_data();
-                syms.push_back(symbol{to_symbol_type(d.type()), sym.get_name(), d.value});
-            }
-        }
-    }
+      for (auto sym : sec.as_symtab()) {
+         if (sym.get_name() == name) {
+            auto& d = sym.get_data();
+            syms.push_back(symbol{ to_symbol_type(d.type()), sym.get_name(), d.value });
+         }
+      }
+   }
 
-    return syms;
+   return syms;
+}
+
+void debugger::initialise_load_address() {
+   //If this is a dynamic library (e.g. PIE)
+   if (m_elf.get_hdr().type == elf::et::dyn) {
+      //The load address is found in /proc/<pid>/maps
+      std::ifstream map("/proc/" + std::to_string(m_pid) + "/maps");
+
+      //Read the first address from the file
+      std::string addr;
+      std::getline(map, addr, '-');
+
+      m_load_address = std::stoi(addr, 0, 16);
+   }
+}
+
+uint64_t debugger::offset_load_address(uint64_t addr) {
+   return addr - m_load_address;
+}
+
+uint64_t debugger::offset_dwarf_address(uint64_t addr) {
+   return addr + m_load_address;
 }
 
 void debugger::remove_breakpoint(std::intptr_t addr) {
@@ -157,30 +180,31 @@ void debugger::step_out() {
 }
 
 void debugger::step_in() {
-    auto line = get_line_entry_from_pc(get_pc())->line;
+   auto line = get_line_entry_from_pc(get_offset_pc())->line;
 
-    while (get_line_entry_from_pc(get_pc())->line == line) {
-        single_step_instruction_with_breakpoint_check();
-    }
+   while (get_line_entry_from_pc(get_offset_pc())->line == line) {
+      single_step_instruction_with_breakpoint_check();
+   }
 
-    auto line_entry = get_line_entry_from_pc(get_pc());
-    print_source(line_entry->file->path, line_entry->line);
+   auto line_entry = get_line_entry_from_pc(get_offset_pc());
+   print_source(line_entry->file->path, line_entry->line);
 }
 
 void debugger::step_over() {
-    auto func = get_function_from_pc(get_pc());
+    auto func = get_function_from_pc(get_offset_pc());
     auto func_entry = at_low_pc(func);
     auto func_end = at_high_pc(func);
 
     auto line = get_line_entry_from_pc(func_entry);
-    auto start_line = get_line_entry_from_pc(get_pc());
+    auto start_line = get_line_entry_from_pc(get_offset_pc());
 
     std::vector<std::intptr_t> to_delete{};
 
     while (line->address < func_end) {
-        if (line->address != start_line->address && !m_breakpoints.count(line->address)) {
-            set_breakpoint_at_address(line->address);
-            to_delete.push_back(line->address);
+        auto load_address = offset_dwarf_address(line->address);
+        if (line->address != start_line->address && !m_breakpoints.count(load_address)) {
+            set_breakpoint_at_address(load_address);
+            to_delete.push_back(load_address);
         }
         ++line;
     }
@@ -224,6 +248,10 @@ void debugger::write_memory(uint64_t address, uint64_t value) {
 
 uint64_t debugger::get_pc() {
     return get_register_value(m_pid, reg::rip);
+}
+
+uint64_t debugger::get_offset_pc() {
+   return offset_load_address(get_pc());
 }
 
 void debugger::set_pc(uint64_t pc) {
@@ -341,7 +369,8 @@ void debugger::handle_sigtrap(siginfo_t info) {
     {
         set_pc(get_pc()-1);
         std::cout << "Hit breakpoint at address 0x" << std::hex << get_pc() << std::endl;
-        auto line_entry = get_line_entry_from_pc(get_pc());
+        auto offset_pc = offset_load_address(get_pc()); //rember to offset the pc for querying DWARF
+        auto line_entry = get_line_entry_from_pc(offset_pc);
         print_source(line_entry->file->path, line_entry->line);
         return;
     }
@@ -353,7 +382,6 @@ void debugger::handle_sigtrap(siginfo_t info) {
         return;
     }
 }
-
 
 void debugger::continue_execution() {
     step_over_breakpoint();
@@ -404,6 +432,15 @@ void debugger::handle_command(const std::string& line) {
         else {
             set_breakpoint_at_function(args[1]);
         }
+    }
+    else if(is_prefix(command, "step")) {
+        step_in();
+    }
+    else if(is_prefix(command, "next")) {
+        step_over();
+    }
+    else if(is_prefix(command, "finish")) {
+        step_out();
     }
     else if(is_prefix(command, "step")) {
         step_in();
@@ -472,7 +509,7 @@ void debugger::set_breakpoint_at_function(const std::string& name) {
                 auto low_pc = at_low_pc(die);
                 auto entry = get_line_entry_from_pc(low_pc);
                 ++entry; //skip prologue
-                set_breakpoint_at_address(entry->address);
+                set_breakpoint_at_address(offset_dwarf_address(entry->address));
             }
         }
     }
@@ -485,7 +522,7 @@ void debugger::set_breakpoint_at_source_line(const std::string& file, unsigned l
 
             for (const auto& entry : lt) {
                 if (entry.is_stmt && entry.line == line) {
-                    set_breakpoint_at_address(entry.address);
+                    set_breakpoint_at_address(offset_dwarf_address(entry.address));
                     return;
                 }
             }
@@ -502,6 +539,7 @@ void debugger::set_breakpoint_at_address(std::intptr_t addr) {
 
 void debugger::run() {
     wait_for_signal();
+    initialise_load_address();
 
     char* line = nullptr;
     while((line = linenoise("minidbg> ")) != nullptr) {
@@ -530,11 +568,12 @@ int main(int argc, char* argv[]) {
     auto pid = fork();
     if (pid == 0) {
         //child
+        personality(ADDR_NO_RANDOMIZE);
         execute_debugee(prog);
-
     }
     else if (pid >= 1)  {
         //parent
+        std::cout << "Started debugging process " << pid << '\n';
         debugger dbg{prog, pid};
         dbg.run();
     }
