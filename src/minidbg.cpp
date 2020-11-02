@@ -138,10 +138,10 @@ void debugger::set_pc(uint64_t pc) {
 
 dwarf::die debugger::get_function_from_pc(uint64_t pc) {
     for (auto &cu : m_dwarf.compilation_units()) {
-        if (die_pc_range(cu.root()).contains(offset_load_address(pc))) {
+        if (die_pc_range(cu.root()).contains(pc)) {
             for (const auto& die : cu.root()) {
                 if (die.tag == dwarf::DW_TAG::subprogram) {
-                    if (die_pc_range(die).contains(offset_load_address(pc))) {
+                    if (die_pc_range(die).contains(pc)) {
                         return die;
                     }
                 }
@@ -154,9 +154,9 @@ dwarf::die debugger::get_function_from_pc(uint64_t pc) {
 
 dwarf::line_table::iterator debugger::get_line_entry_from_pc(uint64_t pc) {
     for (auto &cu : m_dwarf.compilation_units()) {
-        if (die_pc_range(cu.root()).contains(offset_load_address(pc))) {
+        if (die_pc_range(cu.root()).contains(pc)) {
             auto &lt = cu.get_line_table();
-            auto it = lt.find_address(offset_load_address(pc));
+            auto it = lt.find_address(pc);
             if (it == lt.end()) {
                 throw std::out_of_range{"Cannot find line entry"};
             }
@@ -247,7 +247,8 @@ void debugger::handle_sigtrap(siginfo_t info) {
     {
         set_pc(get_pc()-1);
         std::cout << "Hit breakpoint at address 0x" << std::hex << get_pc() << std::endl;
-        auto line_entry = get_line_entry_from_pc(get_pc());
+        auto offset_pc = offset_load_address(get_pc()); //rember to offset the pc for querying DWARF
+        auto line_entry = get_line_entry_from_pc(offset_pc);
         print_source(line_entry->file->path, line_entry->line);
         return;
     }
