@@ -51,10 +51,8 @@ namespace minidbg {
         void set_breakpoint_at_source_line(const std::string& file, unsigned line);
         void dump_registers();
         void print_source(const std::string& file_name, unsigned line, unsigned n_lines_context=2);
-<<<<<<< HEAD
         auto lookup_symbol(const std::string& name) -> std::vector<symbol>;
-=======
->>>>>>> tut_dwarf_step
+
         void single_step_instruction();
         void single_step_instruction_with_breakpoint_check();
         void step_in();

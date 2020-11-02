@@ -20,7 +20,6 @@
 
 using namespace minidbg;
 
-<<<<<<< HEAD
 symbol_type to_symbol_type(elf::stt sym) {
     switch (sym) {
     case elf::stt::notype: return symbol_type::notype;
@@ -33,22 +32,23 @@ symbol_type to_symbol_type(elf::stt sym) {
 };
 
 std::vector<symbol> debugger::lookup_symbol(const std::string& name) {
-    std::vector<symbol> syms;
+   std::vector<symbol> syms;
 
-    for (auto &sec : m_elf.sections()) {
-        if (sec.get_hdr().type != elf::sht::symtab && sec.get_hdr().type != elf::sht::dynsym)
-            continue;
+   for (auto& sec : m_elf.sections()) {
+      if (sec.get_hdr().type != elf::sht::symtab && sec.get_hdr().type != elf::sht::dynsym)
+         continue;
 
-        for (auto sym : sec.as_symtab()) {
-            if (sym.get_name() == name) {
-                auto &d = sym.get_data();
-                syms.push_back(symbol{to_symbol_type(d.type()), sym.get_name(), d.value});
-            }
-        }
-    }
+      for (auto sym : sec.as_symtab()) {
+         if (sym.get_name() == name) {
+            auto& d = sym.get_data();
+            syms.push_back(symbol{ to_symbol_type(d.type()), sym.get_name(), d.value });
+         }
+      }
+   }
 
-    return syms;
-=======
+   return syms;
+}
+
 void debugger::initialise_load_address() {
    //If this is a dynamic library (e.g. PIE)
    if (m_elf.get_hdr().type == elf::et::dyn) {
@@ -65,7 +65,6 @@ void debugger::initialise_load_address() {
 
 uint64_t debugger::offset_load_address(uint64_t addr) {
    return addr - m_load_address;
->>>>>>> tut_dwarf_step
 }
 
 void debugger::remove_breakpoint(std::intptr_t addr) {
@@ -93,11 +92,7 @@ void debugger::step_out() {
 }
 
 void debugger::step_in() {
-<<<<<<< HEAD
     auto line = get_line_entry_from_pc(get_pc())->line;
-=======
-   auto line = get_line_entry_from_pc(get_pc())->line;
->>>>>>> tut_dwarf_step
 
     while (get_line_entry_from_pc(get_pc())->line == line) {
         single_step_instruction_with_breakpoint_check();
@@ -385,15 +380,12 @@ void debugger::handle_command(const std::string& line) {
             write_memory(std::stol(addr, 0, 16), std::stol(val, 0, 16));
         }
     }
-<<<<<<< HEAD
     else if(is_prefix(command, "symbol")) {
         auto syms = lookup_symbol(args[1]);
         for (auto&& s : syms) {
             std::cout << s.name << ' ' << to_string(s.type) << " 0x" << std::hex << s.addr << std::endl;
         }
     }
-=======
->>>>>>> tut_dwarf_step
     else if(is_prefix(command, "stepi")) {
         single_step_instruction_with_breakpoint_check();
         auto line_entry = get_line_entry_from_pc(get_pc());
