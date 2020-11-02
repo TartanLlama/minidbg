@@ -20,6 +20,24 @@
 
 using namespace minidbg;
 
+void debugger::initialise_load_address() {
+   //If this is a dynamic library (e.g. PIE)
+   if (m_elf.get_hdr().type == elf::et::dyn) {
+      //The load address is found in /proc/<pid>/maps
+      std::ifstream map("/proc/" + std::to_string(m_pid) + "/maps");
+
+      //Read the first address from the file
+      std::string addr;
+      std::getline(map, addr, '-');
+
+      m_load_address = std::stoi(addr, 0, 16);
+   }
+}
+
+uint64_t debugger::offset_load_address(uint64_t addr) {
+   return addr - m_load_address;
+}
+
 uint64_t debugger::read_memory(uint64_t address) {
     return ptrace(PTRACE_PEEKDATA, m_pid, address, nullptr);
 }
@@ -147,7 +165,8 @@ void debugger::handle_sigtrap(siginfo_t info) {
     {
         set_pc(get_pc()-1);
         std::cout << "Hit breakpoint at address 0x" << std::hex << get_pc() << std::endl;
-        auto line_entry = get_line_entry_from_pc(get_pc());
+        auto offset_pc = offset_load_address(get_pc()); //rember to offset the pc for querying DWARF
+        auto line_entry = get_line_entry_from_pc(offset_pc);
         print_source(line_entry->file->path, line_entry->line);
         return;
     }
@@ -239,6 +258,7 @@ void debugger::set_breakpoint_at_address(std::intptr_t addr) {
 
 void debugger::run() {
     wait_for_signal();
+    initialise_load_address();
 
     char* line = nullptr;
     while((line = linenoise("minidbg> ")) != nullptr) {
