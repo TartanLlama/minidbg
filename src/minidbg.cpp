@@ -419,7 +419,7 @@ void debugger::set_breakpoint_at_function(const std::string& name) {
                 auto low_pc = at_low_pc(die);
                 auto entry = get_line_entry_from_pc(low_pc);
                 ++entry; //skip prologue
-                set_breakpoint_at_address(entry->address);
+                set_breakpoint_at_address(offset_dwarf_address(entry->address));
             }
         }
     }
@@ -432,7 +432,7 @@ void debugger::set_breakpoint_at_source_line(const std::string& file, unsigned l
 
             for (const auto& entry : lt) {
                 if (entry.is_stmt && entry.line == line) {
-                    set_breakpoint_at_address(entry.address);
+                    set_breakpoint_at_address(offset_dwarf_address(entry.address));
                     return;
                 }
             }
