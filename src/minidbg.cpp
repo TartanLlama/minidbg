@@ -146,7 +146,7 @@ void debugger::initialise_load_address() {
       std::string addr;
       std::getline(map, addr, '-');
 
-      m_load_address = std::stoi(addr, 0, 16);
+      m_load_address = std::stol(addr, 0, 16);
    }
 }
 
