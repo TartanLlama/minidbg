@@ -1,3 +1,5 @@
+*This project has been expanded into a book! It covers many more topics in much greater detail. You can now pre-order [Building a Debugger](https://nostarch.com/building-a-debugger).
+
 # minidbg
 A mini x86 linux debugger for teaching purposes
 
